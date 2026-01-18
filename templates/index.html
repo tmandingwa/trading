@@ -185,9 +185,11 @@
     </div>
 
 <script>
-    const ws = new WebSocket(`ws://${location.host}/ws`);
-    const chartEl = document.getElementById('chart');
+    // AUTOMATIC PROTOCOL DETECTION: Fixes "Insecure WebSocket" and "Mixed Content" errors on Railway
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
+    const chartEl = document.getElementById('chart');
     const userLocale = navigator.language || 'en-US';
 
     const chart = LightweightCharts.createChart(chartEl, {
