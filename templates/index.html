@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>FX TA Dashboard</title>
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        :root {
+            --background: #ffffff;
+            --foreground: #09090b;
+            --card: #ffffff;
+            --primary: #18181b;
+            --primary-foreground: #fafafa;
+            --secondary: #f4f4f5;
+            --secondary-foreground: #18181b;
+            --muted-foreground: #71717a;
+            --border: #e4e4e7;
+            --radius: 0.5rem;
+            --success-text: #166534;
+            --success-bg: #dcfce7;
+            --warning-text: #854d0e;
+            --warning-bg: #fef9c3;
+            --sl-color: #dc2626;
+            --tp-color: #16a34a;
+        }
+
+        html, body { 
+            height: 100vh; width: 100vw; margin: 0; overflow: hidden; 
+            font-family: -apple-system, system-ui, sans-serif;
+            background: var(--secondary); color: var(--foreground);
+        }
+
+        body { display: flex; flex-direction: column; padding: 1rem; gap: 1rem; box-sizing: border-box; }
+        h2 { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -0.025em; }
+
+        .dashboard-grid {
+            display: grid; flex-grow: 1; gap: 1rem; min-height: 0;
+            grid-template-columns: 300px 1fr 340px;
+            grid-template-rows: 1fr 1fr auto;
+        }
+
+        .card {
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 1.25rem; display: flex;
+            flex-direction: column; min-height: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+
+        .card-header { 
+            font-size: 0.75rem; font-weight: 600; text-transform: uppercase; 
+            color: var(--muted-foreground); margin-bottom: 1rem;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+
+        .controls-grid { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 1rem; 
+            margin-bottom: 1.25rem;
+            align-items: end; 
+        }
+
+        .field-group { display: flex; flex-direction: column; gap: 0.375rem; }
+        label { font-size: 0.8rem; font-weight: 500; color: var(--muted-foreground); }
+        
+        select, input {
+            width: 100%; height: 2.25rem; padding: 0 0.75rem; font-size: 0.875rem;
+            border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px);
+            background: var(--background); outline: none;
+        }
+
+        button {
+            flex: 1; height: 2.25rem; font-size: 0.875rem; font-weight: 500;
+            border-radius: calc(var(--radius) - 2px); cursor: pointer; border: 1px solid transparent;
+        }
+        #apply { background: var(--primary); color: var(--primary-foreground); }
+        #resetPaper { background: var(--secondary); color: var(--secondary-foreground); border: 1px solid var(--border); }
+
+        .price-display { font-size: 1.75rem; font-weight: 700; margin: 0.5rem 0; font-family: monospace; }
+        .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem; }
+        .metric-box { background: var(--secondary); padding: 0.625rem; border-radius: var(--radius); }
+        .metric-label { color: var(--muted-foreground); font-size: 0.7rem; display: block; }
+        .metric-value { font-weight: 600; font-family: monospace; }
+
+        .status-badge {
+            padding: 0.125rem 0.625rem; border-radius: 9999px; font-weight: 600; font-size: 0.7rem;
+            background: var(--secondary); border: 1px solid var(--border);
+        }
+        .ready { background: var(--success-bg); color: var(--success-text); border: none; }
+
+        .scroll-area { flex-grow: 1; overflow-y: auto; min-height: 0; }
+
+        .history-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; table-layout: fixed; }
+        .history-table th { 
+            text-align: left; padding: 0.75rem 0.5rem; color: var(--muted-foreground); 
+            border-bottom: 1px solid var(--border); font-weight: 600;
+        }
+        .history-table td { padding: 0.75rem 0.5rem; border-bottom: 1px solid var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        .col-time { width: 15%; } .col-pair { width: 20%; } .col-side { width: 10%; } .col-out  { width: 10%; } .col-pnl  { width: 15%; } .col-rsn  { width: 30%; }
+
+        .pos-card { background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 0.875rem; }
+        .pos-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
+        .pos-side { font-weight: 700; font-size: 0.8rem; }
+        .pos-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.375rem; }
+
+        #chart { flex-grow: 1; width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+
+    <h2>FX TA Dashboard</h2>
+
+    <div class="dashboard-grid">
+        <div class="card" style="grid-row: span 2;">
+            <div class="card-header">Configuration</div>
+            <div class="controls-grid">
+                <div class="field-group">
+                    <label>Pair</label>
+                    <select id="instrument">
+                        {% for inst in instruments %}
+                        <option value="{{inst}}">{{inst}}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field-group">
+                    <label>Timeframe</label>
+                    <select id="tf">
+                        {% for t in tfs %}
+                        <option value="{{t}}">{{t}}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field-group">
+                    <label>Balance (USD)</label>
+                    <input id="balance" type="number" value="1000" style="width:100px">
+                </div>
+                <div class="field-group">
+                    <label>Risk %</label>
+                    <input id="risk_pct" type="number" value="1.0" style="width:100px">
+                </div>
+            </div>
+            <div style="display:flex; gap:0.5rem;"><button id="apply">Apply</button><button id="resetPaper">Reset</button></div>
+        </div>
+
+        <div class="card" style="grid-row: span 2; padding: 0;"><div id="chart"></div></div>
+
+        <div class="card">
+            <div class="card-header">Live Status <div id="status-badge-container"></div></div>
+            <div id="price-main" class="price-display">--.----</div>
+            <div class="metric-row">
+                <div class="metric-box"><span class="metric-label">RSI</span><span class="metric-value" id="rsi-val">--.--</span></div>
+                <div class="metric-box"><span class="metric-label">ATR</span><span class="metric-value" id="atr-val">--.----</span></div>
+            </div>
+            <div id="reason" style="font-size:0.8rem; color:var(--muted-foreground); background:var(--secondary); padding:0.5rem; border-radius:4px;">Scanning...</div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Local Engine <span id="local-stats"></span></div>
+            <div id="paperPositionContainer" class="scroll-area">
+                <div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:2rem 1rem;">No active trades.</div>
+            </div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+            <div class="card-header">Global Performance (All Pairs) <span id="global-metrics"></span></div>
+            <div class="scroll-area">
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th class="col-time">Time</th>
+                            <th class="col-pair">Pair / TF</th>
+                            <th class="col-side">Side</th>
+                            <th class="col-out">Result</th>
+                            <th class="col-pnl">PnL</th>
+                            <th class="col-rsn">Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="global-history-body">
+                        <tr><td colspan="6" style="text-align:center; padding:2rem; color:var(--muted-foreground);">Waiting for concluded trades...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    const chartEl = document.getElementById('chart');
+
+    const userLocale = navigator.language || 'en-US';
+
+    const chart = LightweightCharts.createChart(chartEl, {
+        layout: { background: { color: 'transparent' }, textColor: '#71717a' },
+        grid: { vertLines: { color: '#e4e4e7' }, horzLines: { color: '#e4e4e7' } },
+        localization: {
+            locale: userLocale,
+            timeFormatter: (time) => {
+                const date = new Date(time * 1000);
+                return new Intl.DateTimeFormat(userLocale, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false
+                }).format(date);
+            }
+        },
+        timeScale: {
+            timeVisible: true,
+            secondsVisible: false,
+            borderColor: '#e4e4e7',
+        },
+    });
+
+    const candleSeries = chart.addCandlestickSeries({ upColor: '#16a34a', downColor: '#dc2626' });
+
+    function formatTime(timestamp) {
+        if (!timestamp) return "--:--:--";
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString(userLocale, { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit',
+            hour12: false 
+        });
+    }
+
+    ws.onmessage = (ev) => {
+        const data = JSON.parse(ev.data);
+        const st = data.state;
+        const gs = data.global_stats;
+        const paper = data.paper;
+
+        if (st && st.ok) {
+            document.getElementById("price-main").innerText = st.close.toFixed(4);
+            document.getElementById("rsi-val").innerText = st.rsi.toFixed(2);
+            document.getElementById("atr-val").innerText = st.atr.toFixed(4);
+            document.getElementById("reason").innerText = st.reason || "Scanning...";
+            document.getElementById("status-badge-container").innerHTML = st.side !== "NO_TRADE" ? `<span class="status-badge ready">${st.side}</span>` : "";
+        }
+
+        if (data.candles) candleSeries.setData(data.candles.map(c => ({ time: c.t/1000, open: c.o, high: c.h, low: c.l, close: c.c })));
+
+        const posContainer = document.getElementById("paperPositionContainer");
+        if (paper && paper.open_position) {
+            const pos = paper.open_position;
+            posContainer.innerHTML = `
+                <div class="pos-card">
+                    <div class="pos-header">
+                        <span class="pos-side" style="color:${pos.side === 'BUY' ? 'var(--tp-color)' : 'var(--sl-color)'}">${pos.side} OPEN</span>
+                        <span style="font-size:0.7rem; color:var(--muted-foreground);">${formatTime(pos.entry_time)}</span>
+                    </div>
+                    <div class="pos-row"><span>Entry</span><span class="metric-value">${pos.entry.toFixed(4)}</span></div>
+                    <div class="pos-row"><span>SL</span><span class="metric-value" style="color:var(--sl-color)">${pos.sl.toFixed(4)}</span></div>
+                    <div class="pos-row"><span>TP</span><span class="metric-value" style="color:var(--tp-color)">${pos.tp.toFixed(4)}</span></div>
+                </div>`;
+        } else {
+            posContainer.innerHTML = `<div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:2rem 1rem;">No active trades.</div>`;
+        }
+
+        if (gs) {
+            document.getElementById("global-metrics").innerHTML = `WR: ${gs.win_rate}% | PnL: <span style="color:${gs.pnl >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">$${gs.pnl.toFixed(2)}</span> | Trades: ${gs.trades}`;
+            if (gs.history && gs.history.length > 0) {
+                document.getElementById("global-history-body").innerHTML = gs.history.map(t => `
+                    <tr>
+                        <td class="col-time">${formatTime(t.exit_time)}</td>
+                        <td class="col-pair" style="font-weight:700;">${t.instrument} ${t.tf}</td>
+                        <td class="col-side">${t.side}</td>
+                        <td class="col-out" style="color:${t.outcome === 'TP' ? 'var(--tp-color)' : 'var(--sl-color)'}; font-weight:800;">${t.outcome}</td>
+                        <td class="col-pnl" style="color:${t.pnl_usd >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">$${t.pnl_usd.toFixed(2)}</td>
+                        <td class="col-rsn" style="font-style:italic;">${t.reason}</td>
+                    </tr>`).join('');
+            }
+        }
+    };
+
+    document.getElementById("apply").onclick = () => ws.send(JSON.stringify({ 
+        instrument: document.getElementById("instrument").value, 
+        tf: document.getElementById("tf").value, 
+        balance: document.getElementById("balance").value, 
+        risk_pct: document.getElementById("risk_pct").value 
+    }));
+    document.getElementById("resetPaper").onclick = () => ws.send(JSON.stringify({ reset_paper: true }));
+</script>
+</body>
+</html>
