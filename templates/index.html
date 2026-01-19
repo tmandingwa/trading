@@ -23,10 +23,12 @@
             --warning-bg: #fef9c3;
             --sl-color: #dc2626;
             --tp-color: #16a34a;
+            --open-bg: #eef2ff;
+            --open-text: #3730a3;
         }
 
-        html, body { 
-            height: 100vh; width: 100vw; margin: 0; overflow: hidden; 
+        html, body {
+            height: 100vh; width: 100vw; margin: 0; overflow: hidden;
             font-family: -apple-system, system-ui, sans-serif;
             background: var(--secondary); color: var(--foreground);
         }
@@ -46,23 +48,23 @@
             flex-direction: column; min-height: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
         }
 
-        .card-header { 
-            font-size: 0.75rem; font-weight: 600; text-transform: uppercase; 
+        .card-header {
+            font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
             color: var(--muted-foreground); margin-bottom: 1rem;
             display: flex; justify-content: space-between; align-items: center;
         }
 
-        .controls-grid { 
-            display: grid; 
-            grid-template-columns: 1fr 1fr; 
-            gap: 1rem; 
+        .controls-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
             margin-bottom: 1.25rem;
-            align-items: end; 
+            align-items: end;
         }
 
         .field-group { display: flex; flex-direction: column; gap: 0.375rem; }
         label { font-size: 0.8rem; font-weight: 500; color: var(--muted-foreground); }
-        
+
         select, input {
             width: 100%; height: 2.25rem; padding: 0 0.75rem; font-size: 0.875rem;
             border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px);
@@ -83,21 +85,30 @@
         .metric-value { font-weight: 600; font-family: monospace; }
 
         .status-badge {
-            padding: 0.125rem 0.625rem; border-radius: 9999px; font-weight: 600; font-size: 0.7rem;
+            padding: 0.125rem 0.625rem; border-radius: 9999px; font-weight: 700; font-size: 0.7rem;
             background: var(--secondary); border: 1px solid var(--border);
         }
         .ready { background: var(--success-bg); color: var(--success-text); border: none; }
+        .open { background: var(--open-bg); color: var(--open-text); border: none; }
 
         .scroll-area { flex-grow: 1; overflow-y: auto; min-height: 0; }
 
         .history-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; table-layout: fixed; }
-        .history-table th { 
-            text-align: left; padding: 0.75rem 0.5rem; color: var(--muted-foreground); 
+        .history-table th {
+            text-align: left; padding: 0.75rem 0.5rem; color: var(--muted-foreground);
             border-bottom: 1px solid var(--border); font-weight: 600;
+            position: sticky; top: 0; background: var(--card); z-index: 2;
         }
         .history-table td { padding: 0.75rem 0.5rem; border-bottom: 1px solid var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-        .col-time { width: 15%; } .col-pair { width: 20%; } .col-side { width: 10%; } .col-out  { width: 10%; } .col-pnl  { width: 15%; } .col-rsn  { width: 30%; }
+        /* Updated widths to include Status */
+        .col-time { width: 14%; }
+        .col-pair { width: 18%; }
+        .col-side { width: 9%; }
+        .col-status { width: 10%; }
+        .col-out  { width: 9%; }
+        .col-pnl  { width: 12%; }
+        .col-rsn  { width: 28%; }
 
         .pos-card { background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 0.875rem; }
         .pos-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
@@ -105,6 +116,10 @@
         .pos-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.375rem; }
 
         #chart { flex-grow: 1; width: 100%; height: 100%; }
+
+        /* ✅ Make Global Performance a fixed scrollable box so page fits one screen */
+        .global-card { height: 240px; }
+        .global-card .scroll-area { max-height: 170px; }
     </style>
 </head>
 <body>
@@ -162,7 +177,8 @@
             </div>
         </div>
 
-        <div class="card" style="grid-column: 1 / -1;">
+        <!-- ✅ Global Performance now scrollable and includes Status -->
+        <div class="card global-card" style="grid-column: 1 / -1;">
             <div class="card-header">Global Performance (All Pairs) <span id="global-metrics"></span></div>
             <div class="scroll-area">
                 <table class="history-table">
@@ -171,13 +187,14 @@
                             <th class="col-time">Time</th>
                             <th class="col-pair">Pair / TF</th>
                             <th class="col-side">Side</th>
+                            <th class="col-status">Status</th>
                             <th class="col-out">Result</th>
                             <th class="col-pnl">PnL</th>
                             <th class="col-rsn">Reason</th>
                         </tr>
                     </thead>
                     <tbody id="global-history-body">
-                        <tr><td colspan="6" style="text-align:center; padding:2rem; color:var(--muted-foreground);">Waiting for concluded trades...</td></tr>
+                        <tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -185,7 +202,6 @@
     </div>
 
 <script>
-    // AUTOMATIC PROTOCOL DETECTION: Fixes "Insecure WebSocket" and "Mixed Content" errors on Railway
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
@@ -209,24 +225,22 @@
                 }).format(date);
             }
         },
-        timeScale: {
-            timeVisible: true,
-            secondsVisible: false,
-            borderColor: '#e4e4e7',
-        },
+        timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#e4e4e7' },
     });
 
     const candleSeries = chart.addCandlestickSeries({ upColor: '#16a34a', downColor: '#dc2626' });
 
-    function formatTime(timestamp) {
-        if (!timestamp) return "--:--:--";
-        const date = new Date(timestamp);
-        return date.toLocaleTimeString(userLocale, { 
-            hour: '2-digit', 
-            minute: '2-digit', 
-            second: '2-digit',
-            hour12: false 
-        });
+    function formatTime(ts) {
+        if (!ts) return "--:--:--";
+        const d = new Date(ts);
+        return d.toLocaleTimeString(userLocale, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    }
+
+    function fmtMoney(x) {
+        if (x === null || x === undefined) return "--";
+        const v = Number(x);
+        if (Number.isNaN(v)) return "--";
+        return `$${v.toFixed(2)}`;
     }
 
     ws.onmessage = (ev) => {
@@ -240,10 +254,13 @@
             document.getElementById("rsi-val").innerText = st.rsi.toFixed(2);
             document.getElementById("atr-val").innerText = st.atr.toFixed(4);
             document.getElementById("reason").innerText = st.reason || "Scanning...";
-            document.getElementById("status-badge-container").innerHTML = st.side !== "NO_TRADE" ? `<span class="status-badge ready">${st.side}</span>` : "";
+            document.getElementById("status-badge-container").innerHTML =
+                st.side !== "NO_TRADE" ? `<span class="status-badge ready">${st.side}</span>` : "";
         }
 
-        if (data.candles) candleSeries.setData(data.candles.map(c => ({ time: c.t/1000, open: c.o, high: c.h, low: c.l, close: c.c })));
+        if (data.candles) {
+            candleSeries.setData(data.candles.map(c => ({ time: c.t/1000, open: c.o, high: c.h, low: c.l, close: c.c })));
+        }
 
         const posContainer = document.getElementById("paperPositionContainer");
         if (paper && paper.open_position) {
@@ -263,26 +280,53 @@
         }
 
         if (gs) {
-            document.getElementById("global-metrics").innerHTML = `WR: ${gs.win_rate}% | PnL: <span style="color:${gs.pnl >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">$${gs.pnl.toFixed(2)}</span> | Trades: ${gs.trades}`;
-            if (gs.history && gs.history.length > 0) {
-                document.getElementById("global-history-body").innerHTML = gs.history.map(t => `
-                    <tr>
-                        <td class="col-time">${formatTime(t.exit_time)}</td>
-                        <td class="col-pair" style="font-weight:700;">${t.instrument} ${t.tf}</td>
-                        <td class="col-side">${t.side}</td>
-                        <td class="col-out" style="color:${t.outcome === 'TP' ? 'var(--tp-color)' : 'var(--sl-color)'}; font-weight:800;">${t.outcome}</td>
-                        <td class="col-pnl" style="color:${t.pnl_usd >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">$${t.pnl_usd.toFixed(2)}</td>
-                        <td class="col-rsn" style="font-style:italic;">${t.reason}</td>
-                    </tr>`).join('');
+            // Use DB-driven totals if available, else fallback to old fields
+            const pnl = (gs.pnl_total_db !== undefined) ? gs.pnl_total_db : gs.pnl;
+            const wr = (gs.win_rate_db !== undefined) ? gs.win_rate_db : gs.win_rate;
+            const trades = (gs.closed_trades !== undefined) ? gs.closed_trades : gs.trades;
+
+            document.getElementById("global-metrics").innerHTML =
+                `WR: ${wr}% | PnL: <span style="color:${pnl >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">${fmtMoney(pnl)}</span> | Trades: ${trades} | Open: ${gs.open_trades ?? 0}`;
+
+            // Prefer new combined timeline (OPEN + CLOSED), fallback to old history
+            const rows = gs.timeline && gs.timeline.length ? gs.timeline : (gs.history || []);
+            if (rows && rows.length > 0) {
+                document.getElementById("global-history-body").innerHTML = rows.map(t => {
+                    const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
+                    const isOpen = status === "OPEN";
+                    const timeShow = isOpen ? t.entry_time : t.exit_time;
+                    const outcome = isOpen ? "—" : (t.outcome || t.result || "—");
+                    const pnlVal = isOpen ? null : t.pnl_usd;
+
+                    return `
+                        <tr>
+                            <td class="col-time">${formatTime(timeShow)}</td>
+                            <td class="col-pair" style="font-weight:700;">${t.instrument} ${t.tf}</td>
+                            <td class="col-side">${t.side}</td>
+                            <td class="col-status">
+                                <span class="status-badge ${isOpen ? 'open' : ''}">${status}</span>
+                            </td>
+                            <td class="col-out" style="color:${outcome === 'TP' ? 'var(--tp-color)' : (outcome === 'SL' ? 'var(--sl-color)' : 'var(--muted-foreground)')}; font-weight:800;">
+                                ${outcome}
+                            </td>
+                            <td class="col-pnl" style="color:${(pnlVal ?? 0) >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">
+                                ${isOpen ? "--" : fmtMoney(pnlVal)}
+                            </td>
+                            <td class="col-rsn" style="font-style:italic;">${t.reason || ""}</td>
+                        </tr>`;
+                }).join('');
+            } else {
+                document.getElementById("global-history-body").innerHTML =
+                    `<tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>`;
             }
         }
     };
 
-    document.getElementById("apply").onclick = () => ws.send(JSON.stringify({ 
-        instrument: document.getElementById("instrument").value, 
-        tf: document.getElementById("tf").value, 
-        balance: document.getElementById("balance").value, 
-        risk_pct: document.getElementById("risk_pct").value 
+    document.getElementById("apply").onclick = () => ws.send(JSON.stringify({
+        instrument: document.getElementById("instrument").value,
+        tf: document.getElementById("tf").value,
+        balance: document.getElementById("balance").value,
+        risk_pct: document.getElementById("risk_pct").value
     }));
     document.getElementById("resetPaper").onclick = () => ws.send(JSON.stringify({ reset_paper: true }));
 </script>

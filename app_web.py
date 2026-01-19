@@ -4,7 +4,7 @@ import json
 import sqlite3
 import os
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Tuple, List, Optional
 
 import pandas as pd
 from fastapi import FastAPI, WebSocket
@@ -56,6 +56,26 @@ STREAM_RETRY_SECONDS = float(os.getenv("STREAM_RETRY_SECONDS", "5"))
 STREAM_HEARTBEAT_EVERY = int(os.getenv("STREAM_HEARTBEAT_EVERY", "200"))  # ticks
 FAIL_FAST_IF_NO_OANDA = os.getenv("FAIL_FAST_IF_NO_OANDA", "0") == "1"
 
+# ============================================================
+# AUTO-ENGINE (background trading for ALL pairs/TFs)
+# ============================================================
+AUTO_ENGINE_ALL = os.getenv("AUTO_ENGINE_ALL", "1") == "1"          # default ON
+AUTO_ENGINE_SLEEP = float(os.getenv("AUTO_ENGINE_SLEEP", "0.8"))    # seconds
+AUTO_BALANCE = float(os.getenv("AUTO_BALANCE", "1000"))
+AUTO_RISK_PCT = float(os.getenv("AUTO_RISK_PCT", "1.0"))
+
+# How many rows to keep in global UI timeline (OPEN + CLOSED)
+GLOBAL_TRADE_HISTORY_LIMIT = int(os.getenv("GLOBAL_TRADE_HISTORY_LIMIT", "5000"))
+GLOBAL_OPEN_LIMIT = int(os.getenv("GLOBAL_OPEN_LIMIT", "200"))
+GLOBAL_CLOSED_LIMIT = int(os.getenv("GLOBAL_CLOSED_LIMIT", "5000"))
+
+STREAM_TASK: asyncio.Task | None = None
+ENGINE_TASK: asyncio.Task | None = None
+
+# Per pair/tf guard: prevent double-processing between WS loop + background engine
+ENGINE_LOCKS: Dict[Tuple[str, str], asyncio.Lock] = {}
+LAST_ENGINE_CANDLE: Dict[Tuple[str, str], int] = {}  # last processed candle time (ns int)
+
 
 def init_db():
     db_dir = os.path.dirname(DB_PATH)
@@ -71,6 +91,18 @@ def init_db():
         conn.execute(
             "CREATE TABLE IF NOT EXISTS trade_history (id INTEGER PRIMARY KEY AUTOINCREMENT, instrument TEXT, tf TEXT, side TEXT, entry_time TEXT, exit_time TEXT, entry REAL, exit_px REAL, sl REAL, tp REAL, units REAL, pnl_usd REAL, outcome TEXT, reason TEXT)"
         )
+
+
+def db_fetchone(query: str, params: tuple = ()):
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(query, params)
+        return cur.fetchone()
+
+
+def db_fetchall(query: str, params: tuple = ()):
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(query, params)
+        return cur.fetchall()
 
 
 app = FastAPI()
@@ -115,7 +147,10 @@ PAPER = {
     for inst in SUPPORTED_INSTRUMENTS
 }
 
-STREAM_TASK: asyncio.Task | None = None
+# Init locks for all
+for inst in SUPPORTED_INSTRUMENTS:
+    for tf in SUPPORTED_TFS:
+        ENGINE_LOCKS[(inst, tf)] = asyncio.Lock()
 
 
 # ============================================================
@@ -135,24 +170,216 @@ async def log_http_requests(request: Request, call_next):
         raise
 
 
+def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> Dict[str, Any]:
+    """
+    Global metrics from DB (authoritative):
+    - open positions count + list
+    - closed trades count + list
+    - wins/losses
+    - win rate
+    - pnl total
+    """
+    # OPEN
+    open_rows = db_fetchall(
+        """
+        SELECT instrument, tf, side, entry_time, entry, sl, tp, units, reason
+        FROM open_positions
+        ORDER BY entry_time DESC
+        LIMIT ?
+        """,
+        (limit_open,),
+    )
+    open_positions = []
+    for r in open_rows:
+        open_positions.append({
+            "instrument": r[0], "tf": r[1], "side": r[2],
+            "entry_time": r[3], "entry": r[4], "sl": r[5],
+            "tp": r[6], "units": r[7], "reason": r[8],
+        })
+
+    open_count_row = db_fetchone("SELECT COUNT(*) FROM open_positions")
+    open_count = int(open_count_row[0]) if open_count_row else 0
+
+    # CLOSED (history)
+    closed_count_row = db_fetchone("SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND exit_time != ''")
+    closed_count = int(closed_count_row[0]) if closed_count_row else 0
+
+    wins_row = db_fetchone(
+        "SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND outcome IN ('WIN','TP','SUCCESS','PROFIT')"
+    )
+    losses_row = db_fetchone(
+        "SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND outcome IN ('LOSS','SL','FAIL','FAILED','STOP')"
+    )
+    wins = int(wins_row[0]) if wins_row else 0
+    losses = int(losses_row[0]) if losses_row else 0
+
+    # Fallback: classify by pnl if outcome isn't strict.
+    if (wins + losses) == 0:
+        wins2_row = db_fetchone(
+            "SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND pnl_usd > 0"
+        )
+        losses2_row = db_fetchone(
+            "SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND pnl_usd <= 0"
+        )
+        wins = int(wins2_row[0]) if wins2_row else 0
+        losses = int(losses2_row[0]) if losses2_row else 0
+
+    pnl_row = db_fetchone("SELECT COALESCE(SUM(pnl_usd), 0) FROM trade_history")
+    pnl_total = float(pnl_row[0]) if pnl_row else 0.0
+
+    # recent closed trades
+    closed_rows = db_fetchall(
+        """
+        SELECT instrument, tf, side, entry_time, exit_time, entry, exit_px, sl, tp, units, pnl_usd, outcome, reason
+        FROM trade_history
+        WHERE exit_time IS NOT NULL AND exit_time != ''
+        ORDER BY exit_time DESC
+        LIMIT ?
+        """,
+        (limit_closed,),
+    )
+    closed_trades = []
+    for r in closed_rows:
+        closed_trades.append({
+            "instrument": r[0], "tf": r[1], "side": r[2],
+            "entry_time": r[3], "exit_time": r[4],
+            "entry": r[5], "exit_px": r[6],
+            "sl": r[7], "tp": r[8], "units": r[9],
+            "pnl_usd": r[10], "outcome": r[11], "reason": r[12],
+        })
+
+    total_finished = wins + losses
+    win_rate = (wins / total_finished * 100.0) if total_finished else 0.0
+
+    return {
+        "open_trades": open_count,
+        "closed_trades": closed_count,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 1),
+        "pnl_total": round(pnl_total, 2),
+        "open_positions": open_positions,
+        "closed_history": closed_trades,
+    }
+
+
+def build_global_timeline(limit: int = 5000) -> List[Dict[str, Any]]:
+    """
+    Combined timeline:
+    - OPEN trades from open_positions
+    - CLOSED trades from trade_history
+    Sorted newest first by (exit_time if exists else entry_time).
+    This is what your UI will scroll through to show all historical trades + open trades.
+    """
+    # OPEN (all / limited)
+    open_rows = db_fetchall(
+        """
+        SELECT instrument, tf, side, entry_time, entry, sl, tp, units, reason
+        FROM open_positions
+        ORDER BY entry_time DESC
+        LIMIT ?
+        """,
+        (GLOBAL_OPEN_LIMIT,),
+    )
+    open_items: List[Dict[str, Any]] = []
+    for r in open_rows:
+        open_items.append({
+            "status": "OPEN",
+            "instrument": r[0],
+            "tf": r[1],
+            "side": r[2],
+            "entry_time": r[3],
+            "exit_time": None,
+            "entry": r[4],
+            "sl": r[5],
+            "tp": r[6],
+            "units": r[7],
+            "pnl_usd": None,
+            "outcome": None,
+            "reason": r[8],
+        })
+
+    # CLOSED (all / limited)
+    closed_rows = db_fetchall(
+        """
+        SELECT instrument, tf, side, entry_time, exit_time, entry, exit_px, sl, tp, units, pnl_usd, outcome, reason
+        FROM trade_history
+        WHERE exit_time IS NOT NULL AND exit_time != ''
+        ORDER BY exit_time DESC
+        LIMIT ?
+        """,
+        (GLOBAL_CLOSED_LIMIT,),
+    )
+    closed_items: List[Dict[str, Any]] = []
+    for r in closed_rows:
+        closed_items.append({
+            "status": "CLOSED",
+            "instrument": r[0],
+            "tf": r[1],
+            "side": r[2],
+            "entry_time": r[3],
+            "exit_time": r[4],
+            "entry": r[5],
+            "exit_px": r[6],
+            "sl": r[7],
+            "tp": r[8],
+            "units": r[9],
+            "pnl_usd": r[10],
+            "outcome": r[11],
+            "reason": r[12],
+        })
+
+    def _ts_key(x: Dict[str, Any]) -> str:
+        return str(x.get("exit_time") or x.get("entry_time") or "")
+
+    all_items = open_items + closed_items
+    all_items.sort(key=_ts_key, reverse=True)
+
+    return all_items[:limit]
+
+
 def get_global_paper_stats():
+    """
+    Keep your existing behavior (so nothing breaks),
+    but enrich with DB-global metrics (open/closed/wins/losses lists)
+    AND provide a combined timeline (OPEN + CLOSED) for a scrollable history box.
+    """
     total_trades, total_wins, total_pnl, global_history = 0, 0, 0.0, []
     for inst in SUPPORTED_INSTRUMENTS:
         for tf in SUPPORTED_TFS:
             summary = PAPER[inst][tf].summary()
-            total_trades += summary["trades"]
-            total_wins += summary["wins"]
-            total_pnl += summary["pnl_total"]
-            for t in summary["trade_log"]:
+            total_trades += summary.get("trades", 0)
+            total_wins += summary.get("wins", 0)
+            total_pnl += summary.get("pnl_total", 0.0)
+            for t in summary.get("trade_log", []):
                 t_enriched = t.copy()
                 t_enriched.update({"instrument": inst, "tf": tf})
                 global_history.append(t_enriched)
+
     global_history.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
+
+    dbm = get_global_metrics_from_db(limit_closed=25, limit_open=25)
+    timeline = build_global_timeline(limit=GLOBAL_TRADE_HISTORY_LIMIT)
+
     return {
-        "trades": total_trades,
+        # old fields (UI already expects these)
+        "trades": int(total_trades),
         "win_rate": round(total_wins / total_trades * 100, 1) if total_trades else 0,
-        "pnl": round(total_pnl, 2),
+        "pnl": round(float(total_pnl), 2),
         "history": global_history[:15],
+
+        # DB fields (richer metrics + lists)
+        "open_trades": dbm["open_trades"],
+        "closed_trades": dbm["closed_trades"],
+        "wins": dbm["wins"],
+        "losses": dbm["losses"],
+        "win_rate_db": dbm["win_rate"],
+        "pnl_total_db": dbm["pnl_total"],
+        "open_positions": dbm["open_positions"],
+        "closed_history": dbm["closed_history"],
+
+        # ✅ NEW: full scrollable history (OPEN + CLOSED)
+        "timeline": timeline,
     }
 
 
@@ -170,6 +397,8 @@ async def healthz():
         "oanda_env": OANDA_ENV,
         "templates_dir_exists": os.path.exists(TEMPLATES_DIR),
         "index_template_exists": os.path.exists(INDEX_TEMPLATE_PATH),
+        "auto_engine_all": AUTO_ENGINE_ALL,
+        "global_trade_history_limit": GLOBAL_TRADE_HISTORY_LIMIT,
     })
 
 
@@ -185,9 +414,17 @@ async def readyz():
         return JSONResponse({"ready": False, "error": repr(e)}, status_code=500)
 
 
+@app.get("/metricsz")
+async def metricsz():
+    """
+    Quick endpoint to view global metrics in JSON (helps debugging without UI changes).
+    """
+    return JSONResponse(get_global_paper_stats())
+
+
 @app.on_event("startup")
 async def on_startup():
-    global STREAM_TASK
+    global STREAM_TASK, ENGINE_TASK
     print("[startup] on_startup() entered ✅", flush=True)
 
     init_db()
@@ -208,6 +445,10 @@ async def on_startup():
 
     STREAM_TASK = asyncio.create_task(stream_loop())
     print("[startup] Live stream task started ✅", flush=True)
+
+    if AUTO_ENGINE_ALL:
+        ENGINE_TASK = asyncio.create_task(engine_loop_all())
+        print("[startup] Auto-engine (ALL pairs/TFs) started ✅", flush=True)
 
 
 async def stream_loop():
@@ -259,6 +500,68 @@ def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
     ]
 
 
+async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: float):
+    """
+    Safe single-step engine process:
+    - lock per pair/tf
+    - only process a candle once (prevents duplicates across ws loop + background loop)
+    """
+    key = (inst, tf)
+    lock = ENGINE_LOCKS.get(key)
+    if lock is None:
+        ENGINE_LOCKS[key] = asyncio.Lock()
+        lock = ENGINE_LOCKS[key]
+
+    async with lock:
+        df = AGGS[inst][tf].to_df()
+        if df is None or df.empty or len(df) < 50:
+            return None, None
+
+        # Use last index timestamp as "latest candle marker"
+        try:
+            latest_ts_ns = int(df.index[-1].value)
+        except Exception:
+            latest_ts_ns = int(time.time() * 1e9)
+
+        # Only process if candle marker advanced
+        last = LAST_ENGINE_CANDLE.get(key)
+        if last is not None and latest_ts_ns <= last:
+            # No new candle since last engine run
+            state = compute_state(df, CFG)
+            return state, df
+
+        # mark as processed BEFORE running actions to avoid re-entry loops on fast schedules
+        LAST_ENGINE_CANDLE[key] = latest_ts_ns
+
+        state = compute_state(df, CFG)
+        pe = PAPER[inst][tf]
+
+        # exits/updates
+        pe.update_on_new_closed_candle(df)
+
+        # entries
+        pe.maybe_enter(state, df, balance, risk_pct)
+
+        return state, df
+
+
+async def engine_loop_all():
+    """
+    Background engine loop:
+    trades/logs ALL pairs + ALL timeframes even if not selected in UI.
+    """
+    print("[engine] engine_loop_all started ✅", flush=True)
+    while True:
+        try:
+            for inst in SUPPORTED_INSTRUMENTS:
+                for tf in SUPPORTED_TFS:
+                    await process_engine_once(inst, tf, AUTO_BALANCE, AUTO_RISK_PCT)
+        except Exception as e:
+            print("[engine][WARN] loop error:", repr(e), flush=True)
+
+        await asyncio.sleep(AUTO_ENGINE_SLEEP)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     """
@@ -286,7 +589,7 @@ async def root(request: Request):
             <h2>FX TA Dashboard (Fallback)</h2>
             <p><b>Status:</b> Running ✅</p>
             <p><b>Note:</b> templates/index.html was not found in this deployment.</p>
-            <p>Check: <a href="/healthz">/healthz</a> | <a href="/readyz">/readyz</a> | <a href="/ping">/ping</a></p>
+            <p>Check: <a href="/healthz">/healthz</a> | <a href="/readyz">/readyz</a> | <a href="/ping">/ping</a> | <a href="/metricsz">/metricsz</a></p>
             <pre>BASE_DIR={BASE_DIR}
 TEMPLATES_DIR={TEMPLATES_DIR}
 INDEX_TEMPLATE_PATH={INDEX_TEMPLATE_PATH}</pre>
@@ -329,19 +632,27 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_text(json.dumps({
                     "subscription": sub,
                     "error": f"Invalid subscription: {inst}/{tf}",
-                }))
+                    "global_stats": get_global_paper_stats(),
+                }, default=str))
                 await asyncio.sleep(0.5)
                 continue
 
-            df = AGGS[inst][tf].to_df()
-            state = compute_state(df, CFG)
+            # IMPORTANT: Use guarded engine processing to prevent duplicates with background loop
+            state, df = await process_engine_once(inst, tf, user_cfg["balance"], user_cfg["risk_pct"])
+
+            if df is None:
+                await ws.send_text(json.dumps({
+                    "subscription": sub,
+                    "error": f"No candles yet for {inst}/{tf}",
+                    "global_stats": get_global_paper_stats(),
+                }, default=str))
+                await asyncio.sleep(0.5)
+                continue
 
             pe = PAPER[inst][tf]
-            pe.update_on_new_closed_candle(df)
-            pe.maybe_enter(state, df, user_cfg["balance"], user_cfg["risk_pct"])
 
             sizing = {"units": None, "lots": None}
-            if state.get("ok") and state.get("side") in ("BUY", "SELL"):
+            if state and state.get("ok") and state.get("side") in ("BUY", "SELL"):
                 p = state.get("plan", {})
                 if p.get("entry") and p.get("sl"):
                     u = PaperEngine.compute_units_quote_usd(
@@ -355,7 +666,7 @@ async def ws_endpoint(ws: WebSocket):
                 "sizing": sizing,
                 "candles": df_to_candles_payload(df),
                 "paper": pe.summary(),
-                "global_stats": get_global_paper_stats(),
+                "global_stats": get_global_paper_stats(),  # includes timeline now
                 "params": CFG,
             }, default=str))
 
