@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from starlette.websockets import WebSocketDisconnect
+from starlette.staticfiles import StaticFiles
 
 from config import (
     OANDA_TOKEN, OANDA_ACCOUNT_ID, OANDA_ENV,
@@ -28,9 +29,20 @@ from strategy_rules import compute_state
 from paper_engine import PaperEngine
 
 # ============================================================
+# PATHS (make templates/static robust on Railway)
+# ============================================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+INDEX_TEMPLATE_PATH = os.path.join(TEMPLATES_DIR, "index.html")
+
+# ============================================================
 # BOOT LOGS (helps Railway debugging)
 # ============================================================
 print("[boot] app_web.py imported ✅", flush=True)
+print("[boot] BASE_DIR =", BASE_DIR, flush=True)
+print("[boot] TEMPLATES_DIR exists? ", os.path.exists(TEMPLATES_DIR), flush=True)
+print("[boot] INDEX_TEMPLATE exists? ", os.path.exists(INDEX_TEMPLATE_PATH), flush=True)
 print("[boot] PORT env =", os.getenv("PORT"), flush=True)
 print("[boot] OANDA_ENV =", OANDA_ENV, flush=True)
 print("[boot] OANDA_TOKEN set? ", "YES" if (OANDA_TOKEN and len(OANDA_TOKEN) > 20) else "NO", flush=True)
@@ -43,6 +55,7 @@ DB_PATH = os.getenv("DB_PATH", "/data/trades.db")
 STREAM_RETRY_SECONDS = float(os.getenv("STREAM_RETRY_SECONDS", "5"))
 STREAM_HEARTBEAT_EVERY = int(os.getenv("STREAM_HEARTBEAT_EVERY", "200"))  # ticks
 FAIL_FAST_IF_NO_OANDA = os.getenv("FAIL_FAST_IF_NO_OANDA", "0") == "1"
+
 
 def init_db():
     db_dir = os.path.dirname(DB_PATH)
@@ -59,11 +72,19 @@ def init_db():
             "CREATE TABLE IF NOT EXISTS trade_history (id INTEGER PRIMARY KEY AUTOINCREMENT, instrument TEXT, tf TEXT, side TEXT, entry_time TEXT, exit_time TEXT, entry REAL, exit_px REAL, sl REAL, tp REAL, units REAL, pnl_usd REAL, outcome TEXT, reason TEXT)"
         )
 
-# ============================================================
-# APP
-# ============================================================
+
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
+
+# Templates (absolute directory)
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+# Static (optional) - only mount if folder exists
+if os.path.exists(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    print("[boot] Static mounted at /static ✅", flush=True)
+else:
+    print("[boot] No static/ folder (OK)", flush=True)
+
 
 SUPPORTED_INSTRUMENTS = ["EUR_USD", "GBP_USD", "XAU_USD"]
 SUPPORTED_TFS = list(TF_TO_PANDAS.keys())
@@ -98,7 +119,7 @@ STREAM_TASK: asyncio.Task | None = None
 
 
 # ============================================================
-# SIMPLE REQUEST LOGGER (helps debug "failed to respond")
+# SIMPLE REQUEST LOGGER (CRITICAL for Railway routing debug)
 # ============================================================
 @app.middleware("http")
 async def log_http_requests(request: Request, call_next):
@@ -135,10 +156,11 @@ def get_global_paper_stats():
     }
 
 
-# ============================================================
-# HEALTH / READINESS
-# These must ALWAYS respond fast.
-# ============================================================
+@app.get("/ping")
+async def ping():
+    return PlainTextResponse("pong")
+
+
 @app.get("/healthz")
 async def healthz():
     return JSONResponse({
@@ -146,11 +168,13 @@ async def healthz():
         "service": "trading",
         "port": os.getenv("PORT"),
         "oanda_env": OANDA_ENV,
+        "templates_dir_exists": os.path.exists(TEMPLATES_DIR),
+        "index_template_exists": os.path.exists(INDEX_TEMPLATE_PATH),
     })
+
 
 @app.get("/readyz")
 async def readyz():
-    # "Ready" means we have at least some seeded candles in memory
     try:
         inst = DEFAULT_INSTRUMENT if DEFAULT_INSTRUMENT in SUPPORTED_INSTRUMENTS else SUPPORTED_INSTRUMENTS[0]
         tf = DEFAULT_TF if DEFAULT_TF in SUPPORTED_TFS else SUPPORTED_TFS[0]
@@ -161,9 +185,6 @@ async def readyz():
         return JSONResponse({"ready": False, "error": repr(e)}, status_code=500)
 
 
-# ============================================================
-# STARTUP
-# ============================================================
 @app.on_event("startup")
 async def on_startup():
     global STREAM_TASK
@@ -185,18 +206,11 @@ async def on_startup():
             except Exception as e:
                 print(f"[seed][WARN] {inst} {tf} failed: {repr(e)}", flush=True)
 
-    # Start streaming task (with reconnect) — never block HTTP
     STREAM_TASK = asyncio.create_task(stream_loop())
     print("[startup] Live stream task started ✅", flush=True)
 
 
 async def stream_loop():
-    """
-    Robust streaming loop:
-    - reconnects if OANDA drops
-    - never dies silently
-    - logs heartbeat every N ticks
-    """
     instruments = ",".join(SUPPORTED_INSTRUMENTS)
     tick_count = 0
 
@@ -229,25 +243,30 @@ async def stream_loop():
             await asyncio.sleep(STREAM_RETRY_SECONDS)
 
 
-# ============================================================
-# ROOT ROUTES
-# IMPORTANT: Provide a fallback if templates/index.html is missing on Railway.
-# This prevents Railway "Application failed to respond".
-# ============================================================
-@app.get("/ping")
-async def ping():
-    return PlainTextResponse("pong")
+def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
+    if df is None or df.empty:
+        return []
+    d = df.tail(limit).copy().sort_index()
+    return [
+        {
+            "t": int(ts.value // 1_000_000),  # ms for JS
+            "o": float(row["open"]),
+            "h": float(row["high"]),
+            "l": float(row["low"]),
+            "c": float(row["close"]),
+        }
+        for ts, row in d.iterrows()
+    ]
 
-@app.get("/")
+
+@app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     """
-    If templates are present, serve the UI.
-    If not, return a safe JSON response so Railway always gets a response.
+    Serve UI if template exists. Otherwise return a fallback HTML page
+    (so Railway always shows something on /).
     """
     try:
-        # only attempt template rendering if file exists
-        template_path = os.path.join("templates", "index.html")
-        if os.path.exists(template_path):
+        if os.path.exists(INDEX_TEMPLATE_PATH):
             return templates.TemplateResponse(
                 "index.html",
                 {
@@ -258,36 +277,29 @@ async def root(request: Request):
                     "default_tf": DEFAULT_TF,
                 },
             )
-        # fallback
-        return JSONResponse({
-            "service": "FX Technical Rules Engine",
-            "status": "running",
-            "note": "templates/index.html not found in container — returning JSON fallback",
-        })
+
+        # Fallback HTML: proves routing works even if templates missing
+        html = f"""
+        <html>
+          <head><title>FX TA Dashboard</title></head>
+          <body style="font-family:Arial; padding:24px;">
+            <h2>FX TA Dashboard (Fallback)</h2>
+            <p><b>Status:</b> Running ✅</p>
+            <p><b>Note:</b> templates/index.html was not found in this deployment.</p>
+            <p>Check: <a href="/healthz">/healthz</a> | <a href="/readyz">/readyz</a> | <a href="/ping">/ping</a></p>
+            <pre>BASE_DIR={BASE_DIR}
+TEMPLATES_DIR={TEMPLATES_DIR}
+INDEX_TEMPLATE_PATH={INDEX_TEMPLATE_PATH}</pre>
+          </body>
+        </html>
+        """
+        return HTMLResponse(content=html, status_code=200)
+
     except Exception as e:
-        # fallback even if template rendering fails
-        return JSONResponse({
-            "service": "FX Technical Rules Engine",
-            "status": "running_but_ui_failed",
-            "error": repr(e),
-        }, status_code=200)
-
-
-def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
-    if df is None or df.empty:
-        return []
-    d = df.tail(limit).copy().sort_index()
-    # ts.value is ns; convert to ms for JS
-    return [
-        {
-            "t": int(ts.value // 1_000_000),
-            "o": float(row["open"]),
-            "h": float(row["high"]),
-            "l": float(row["low"]),
-            "c": float(row["close"]),
-        }
-        for ts, row in d.iterrows()
-    ]
+        return HTMLResponse(
+            content=f"<h3>UI failed but backend running</h3><pre>{repr(e)}</pre>",
+            status_code=200
+        )
 
 
 @app.websocket("/ws")
@@ -313,7 +325,6 @@ async def ws_endpoint(ws: WebSocket):
 
             inst, tf = sub["instrument"], sub["tf"]
 
-            # Guard against invalid instrument/tf
             if inst not in AGGS or tf not in AGGS[inst]:
                 await ws.send_text(json.dumps({
                     "subscription": sub,
