@@ -5,9 +5,10 @@ import sqlite3
 import os
 import time
 from typing import Dict, Any
+
 import pandas as pd
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 from starlette.websockets import WebSocketDisconnect
@@ -18,8 +19,8 @@ from config import (
     EMA_FAST, EMA_SLOW, RSI_LEN, RSI_BUY_MAX, RSI_SELL_MIN,
     ATR_LEN, SL_ATR, TP_RR, USE_ENGULFING, USE_SR, SWING_LOOKBACK,
     SR_TOL_ATR, MIN_CONDITIONS_TO_TRADE, SEED_CANDLES,
-    # optional toggles (added below safely if not present)
 )
+
 from candle_agg import CandleAggregator, TF_TO_PANDAS
 from oanda_stream import price_stream, OandaStreamError
 from oanda_history import fetch_candles
@@ -29,11 +30,11 @@ from paper_engine import PaperEngine
 # ============================================================
 # BOOT LOGS (helps Railway debugging)
 # ============================================================
-print("[boot] app_web.py imported ✅")
-print("[boot] PORT env =", os.getenv("PORT"))
-print("[boot] OANDA_ENV =", OANDA_ENV)
-print("[boot] OANDA_TOKEN set? ", "YES" if (OANDA_TOKEN and len(OANDA_TOKEN) > 20) else "NO")
-print("[boot] OANDA_ACCOUNT_ID set? ", "YES" if (OANDA_ACCOUNT_ID and len(OANDA_ACCOUNT_ID) > 5) else "NO")
+print("[boot] app_web.py imported ✅", flush=True)
+print("[boot] PORT env =", os.getenv("PORT"), flush=True)
+print("[boot] OANDA_ENV =", OANDA_ENV, flush=True)
+print("[boot] OANDA_TOKEN set? ", "YES" if (OANDA_TOKEN and len(OANDA_TOKEN) > 20) else "NO", flush=True)
+print("[boot] OANDA_ACCOUNT_ID set? ", "YES" if (OANDA_ACCOUNT_ID and len(OANDA_ACCOUNT_ID) > 5) else "NO", flush=True)
 
 # Default path for local development. Change this to /data/trades.db on Railway.
 DB_PATH = os.getenv("DB_PATH", "/data/trades.db")
@@ -48,21 +49,70 @@ def init_db():
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS engine_state (instrument TEXT, tf TEXT, balance REAL, balance_start REAL, PRIMARY KEY (instrument, tf))")
-        conn.execute("CREATE TABLE IF NOT EXISTS open_positions (instrument TEXT, tf TEXT, side TEXT, entry_time TEXT, entry REAL, sl REAL, tp REAL, units REAL, reason TEXT, PRIMARY KEY (instrument, tf))")
-        conn.execute("CREATE TABLE IF NOT EXISTS trade_history (id INTEGER PRIMARY KEY AUTOINCREMENT, instrument TEXT, tf TEXT, side TEXT, entry_time TEXT, exit_time TEXT, entry REAL, exit_px REAL, sl REAL, tp REAL, units REAL, pnl_usd REAL, outcome TEXT, reason TEXT)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS engine_state (instrument TEXT, tf TEXT, balance REAL, balance_start REAL, PRIMARY KEY (instrument, tf))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS open_positions (instrument TEXT, tf TEXT, side TEXT, entry_time TEXT, entry REAL, sl REAL, tp REAL, units REAL, reason TEXT, PRIMARY KEY (instrument, tf))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS trade_history (id INTEGER PRIMARY KEY AUTOINCREMENT, instrument TEXT, tf TEXT, side TEXT, entry_time TEXT, exit_time TEXT, entry REAL, exit_px REAL, sl REAL, tp REAL, units REAL, pnl_usd REAL, outcome TEXT, reason TEXT)"
+        )
 
+# ============================================================
+# APP
+# ============================================================
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
 SUPPORTED_INSTRUMENTS = ["EUR_USD", "GBP_USD", "XAU_USD"]
 SUPPORTED_TFS = list(TF_TO_PANDAS.keys())
 
-AGGS = {inst: {tf: CandleAggregator(tf=tf, max_candles=800) for tf in SUPPORTED_TFS} for inst in SUPPORTED_INSTRUMENTS}
-CFG = {"EMA_FAST": EMA_FAST, "EMA_SLOW": EMA_SLOW, "RSI_LEN": RSI_LEN, "RSI_BUY_MAX": RSI_BUY_MAX, "RSI_SELL_MIN": RSI_SELL_MIN, "ATR_LEN": ATR_LEN, "SL_ATR": SL_ATR, "TP_RR": TP_RR, "USE_ENGULFING": USE_ENGULFING, "USE_SR": USE_SR, "SWING_LOOKBACK": SWING_LOOKBACK, "SR_TOL_ATR": SR_TOL_ATR, "MIN_CONDITIONS_TO_TRADE": MIN_CONDITIONS_TO_TRADE}
-PAPER = {inst: {tf: PaperEngine(instrument=inst, tf=tf, db_path=DB_PATH) for tf in SUPPORTED_TFS} for inst in SUPPORTED_INSTRUMENTS}
+AGGS = {
+    inst: {tf: CandleAggregator(tf=tf, max_candles=800) for tf in SUPPORTED_TFS}
+    for inst in SUPPORTED_INSTRUMENTS
+}
+
+CFG = {
+    "EMA_FAST": EMA_FAST,
+    "EMA_SLOW": EMA_SLOW,
+    "RSI_LEN": RSI_LEN,
+    "RSI_BUY_MAX": RSI_BUY_MAX,
+    "RSI_SELL_MIN": RSI_SELL_MIN,
+    "ATR_LEN": ATR_LEN,
+    "SL_ATR": SL_ATR,
+    "TP_RR": TP_RR,
+    "USE_ENGULFING": USE_ENGULFING,
+    "USE_SR": USE_SR,
+    "SWING_LOOKBACK": SWING_LOOKBACK,
+    "SR_TOL_ATR": SR_TOL_ATR,
+    "MIN_CONDITIONS_TO_TRADE": MIN_CONDITIONS_TO_TRADE,
+}
+
+PAPER = {
+    inst: {tf: PaperEngine(instrument=inst, tf=tf, db_path=DB_PATH) for tf in SUPPORTED_TFS}
+    for inst in SUPPORTED_INSTRUMENTS
+}
 
 STREAM_TASK: asyncio.Task | None = None
+
+
+# ============================================================
+# SIMPLE REQUEST LOGGER (helps debug "failed to respond")
+# ============================================================
+@app.middleware("http")
+async def log_http_requests(request: Request, call_next):
+    t0 = time.time()
+    try:
+        response = await call_next(request)
+        dt = (time.time() - t0) * 1000
+        print(f"[http] {request.method} {request.url.path} -> {response.status_code} ({dt:.1f}ms)", flush=True)
+        return response
+    except Exception as e:
+        dt = (time.time() - t0) * 1000
+        print(f"[http][ERR] {request.method} {request.url.path} crashed after {dt:.1f}ms: {repr(e)}", flush=True)
+        raise
+
 
 def get_global_paper_stats():
     total_trades, total_wins, total_pnl, global_history = 0, 0, 0.0, []
@@ -77,16 +127,47 @@ def get_global_paper_stats():
                 t_enriched.update({"instrument": inst, "tf": tf})
                 global_history.append(t_enriched)
     global_history.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
-    return {"trades": total_trades, "win_rate": round(total_wins/total_trades*100, 1) if total_trades else 0, "pnl": round(total_pnl, 2), "history": global_history[:15]}
+    return {
+        "trades": total_trades,
+        "win_rate": round(total_wins / total_trades * 100, 1) if total_trades else 0,
+        "pnl": round(total_pnl, 2),
+        "history": global_history[:15],
+    }
 
+
+# ============================================================
+# HEALTH / READINESS
+# These must ALWAYS respond fast.
+# ============================================================
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "service": "trading", "streaming": True}
+    return JSONResponse({
+        "ok": True,
+        "service": "trading",
+        "port": os.getenv("PORT"),
+        "oanda_env": OANDA_ENV,
+    })
 
+@app.get("/readyz")
+async def readyz():
+    # "Ready" means we have at least some seeded candles in memory
+    try:
+        inst = DEFAULT_INSTRUMENT if DEFAULT_INSTRUMENT in SUPPORTED_INSTRUMENTS else SUPPORTED_INSTRUMENTS[0]
+        tf = DEFAULT_TF if DEFAULT_TF in SUPPORTED_TFS else SUPPORTED_TFS[0]
+        df = AGGS[inst][tf].to_df()
+        ok = df is not None and len(df) >= 50
+        return JSONResponse({"ready": bool(ok), "candles": int(len(df)) if df is not None else 0})
+    except Exception as e:
+        return JSONResponse({"ready": False, "error": repr(e)}, status_code=500)
+
+
+# ============================================================
+# STARTUP
+# ============================================================
 @app.on_event("startup")
 async def on_startup():
     global STREAM_TASK
-    print("[startup] on_startup() entered ✅")
+    print("[startup] on_startup() entered ✅", flush=True)
 
     init_db()
 
@@ -100,13 +181,14 @@ async def on_startup():
                 hist = await fetch_candles(inst, tf, count=SEED_CANDLES)
                 AGGS[inst][tf].seed_from_ohlc_df(hist)
                 PAPER[inst][tf].load_from_db()
-                print(f"[seed] {inst} {tf}: {len(hist)} candles")
+                print(f"[seed] {inst} {tf}: {len(hist)} candles", flush=True)
             except Exception as e:
-                print(f"[seed][WARN] {inst} {tf} failed: {repr(e)}")
+                print(f"[seed][WARN] {inst} {tf} failed: {repr(e)}", flush=True)
 
-    # Start streaming task (with reconnect)
+    # Start streaming task (with reconnect) — never block HTTP
     STREAM_TASK = asyncio.create_task(stream_loop())
-    print("[startup] Live stream task started ✅")
+    print("[startup] Live stream task started ✅", flush=True)
+
 
 async def stream_loop():
     """
@@ -121,13 +203,13 @@ async def stream_loop():
     while True:
         try:
             if not OANDA_TOKEN or not OANDA_ACCOUNT_ID:
-                # In production, if env vars disappear/mis-set, we don’t want a silent task.
                 msg = "Missing OANDA_TOKEN or OANDA_ACCOUNT_ID (set env vars)."
-                print(f"[stream][WARN] {msg} retrying in {STREAM_RETRY_SECONDS}s…")
+                print(f"[stream][WARN] {msg} retrying in {STREAM_RETRY_SECONDS}s…", flush=True)
                 await asyncio.sleep(STREAM_RETRY_SECONDS)
                 continue
 
-            print(f"[stream] connecting… instruments={instruments}")
+            print(f"[stream] connecting… instruments={instruments}", flush=True)
+
             async for tick in price_stream(instruments):
                 inst, mid, ts = tick["instrument"], tick["mid"], tick["time"]
 
@@ -137,42 +219,109 @@ async def stream_loop():
 
                 tick_count += 1
                 if tick_count % STREAM_HEARTBEAT_EVERY == 0:
-                    print(f"[stream] heartbeat ticks={tick_count} last={inst} mid={mid}")
+                    print(f"[stream] heartbeat ticks={tick_count} last={inst} mid={mid}", flush=True)
 
         except (OandaStreamError,) as e:
-            print(f"[stream][WARN] stream error: {repr(e)} — reconnecting in {STREAM_RETRY_SECONDS}s…")
+            print(f"[stream][WARN] stream error: {repr(e)} — reconnecting in {STREAM_RETRY_SECONDS}s…", flush=True)
             await asyncio.sleep(STREAM_RETRY_SECONDS)
         except Exception as e:
-            print(f"[stream][WARN] unexpected error: {repr(e)} — reconnecting in {STREAM_RETRY_SECONDS}s…")
+            print(f"[stream][WARN] unexpected error: {repr(e)} — reconnecting in {STREAM_RETRY_SECONDS}s…", flush=True)
             await asyncio.sleep(STREAM_RETRY_SECONDS)
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "instruments": SUPPORTED_INSTRUMENTS, "tfs": SUPPORTED_TFS, "default_instrument": DEFAULT_INSTRUMENT, "default_tf": DEFAULT_TF})
+
+# ============================================================
+# ROOT ROUTES
+# IMPORTANT: Provide a fallback if templates/index.html is missing on Railway.
+# This prevents Railway "Application failed to respond".
+# ============================================================
+@app.get("/ping")
+async def ping():
+    return PlainTextResponse("pong")
+
+@app.get("/")
+async def root(request: Request):
+    """
+    If templates are present, serve the UI.
+    If not, return a safe JSON response so Railway always gets a response.
+    """
+    try:
+        # only attempt template rendering if file exists
+        template_path = os.path.join("templates", "index.html")
+        if os.path.exists(template_path):
+            return templates.TemplateResponse(
+                "index.html",
+                {
+                    "request": request,
+                    "instruments": SUPPORTED_INSTRUMENTS,
+                    "tfs": SUPPORTED_TFS,
+                    "default_instrument": DEFAULT_INSTRUMENT,
+                    "default_tf": DEFAULT_TF,
+                },
+            )
+        # fallback
+        return JSONResponse({
+            "service": "FX Technical Rules Engine",
+            "status": "running",
+            "note": "templates/index.html not found in container — returning JSON fallback",
+        })
+    except Exception as e:
+        # fallback even if template rendering fails
+        return JSONResponse({
+            "service": "FX Technical Rules Engine",
+            "status": "running_but_ui_failed",
+            "error": repr(e),
+        }, status_code=200)
+
 
 def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
     if df is None or df.empty:
         return []
     d = df.tail(limit).copy().sort_index()
-    return [{"t": int(ts.value // 1_000_000), "o": float(row["open"]), "h": float(row["high"]), "l": float(row["low"]), "c": float(row["close"])} for ts, row in d.iterrows()]
+    # ts.value is ns; convert to ms for JS
+    return [
+        {
+            "t": int(ts.value // 1_000_000),
+            "o": float(row["open"]),
+            "h": float(row["high"]),
+            "l": float(row["low"]),
+            "c": float(row["close"]),
+        }
+        for ts, row in d.iterrows()
+    ]
+
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
-    sub, user_cfg = {"instrument": DEFAULT_INSTRUMENT, "tf": DEFAULT_TF}, {"balance": 1000.0, "risk_pct": 1.0}
+    sub = {"instrument": DEFAULT_INSTRUMENT, "tf": DEFAULT_TF}
+    user_cfg = {"balance": 1000.0, "risk_pct": 1.0}
+
     try:
         while True:
             try:
                 msg = await asyncio.wait_for(ws.receive_text(), timeout=0.25)
                 data = json.loads(msg)
+
                 sub.update({k: data[k] for k in ["instrument", "tf"] if k in data})
                 user_cfg.update({k: float(data[k]) for k in ["balance", "risk_pct"] if k in data})
+
                 if data.get("reset_paper"):
                     PAPER[sub["instrument"]][sub["tf"]].reset(balance=user_cfg["balance"])
+
             except asyncio.TimeoutError:
                 pass
 
             inst, tf = sub["instrument"], sub["tf"]
+
+            # Guard against invalid instrument/tf
+            if inst not in AGGS or tf not in AGGS[inst]:
+                await ws.send_text(json.dumps({
+                    "subscription": sub,
+                    "error": f"Invalid subscription: {inst}/{tf}",
+                }))
+                await asyncio.sleep(0.5)
+                continue
+
             df = AGGS[inst][tf].to_df()
             state = compute_state(df, CFG)
 
@@ -184,7 +333,9 @@ async def ws_endpoint(ws: WebSocket):
             if state.get("ok") and state.get("side") in ("BUY", "SELL"):
                 p = state.get("plan", {})
                 if p.get("entry") and p.get("sl"):
-                    u = PaperEngine.compute_units_quote_usd(user_cfg["balance"], user_cfg["risk_pct"], p["entry"], p["sl"])
+                    u = PaperEngine.compute_units_quote_usd(
+                        user_cfg["balance"], user_cfg["risk_pct"], p["entry"], p["sl"]
+                    )
                     sizing = {"units": float(u), "lots": float(PaperEngine.units_to_lots(u))}
 
             await ws.send_text(json.dumps({
