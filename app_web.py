@@ -3,6 +3,7 @@ import asyncio
 import json
 import sqlite3
 import os
+import time
 from typing import Dict, Any
 import pandas as pd
 from fastapi import FastAPI, WebSocket
@@ -12,19 +13,35 @@ from starlette.requests import Request
 from starlette.websockets import WebSocketDisconnect
 
 from config import (
-    OANDA_TOKEN, OANDA_ACCOUNT_ID, DEFAULT_INSTRUMENT, DEFAULT_TF,
+    OANDA_TOKEN, OANDA_ACCOUNT_ID, OANDA_ENV,
+    DEFAULT_INSTRUMENT, DEFAULT_TF,
     EMA_FAST, EMA_SLOW, RSI_LEN, RSI_BUY_MAX, RSI_SELL_MIN,
-    ATR_LEN, SL_ATR, TP_RR, USE_ENGULFING, USE_SR, SWING_LOOKBACK, 
+    ATR_LEN, SL_ATR, TP_RR, USE_ENGULFING, USE_SR, SWING_LOOKBACK,
     SR_TOL_ATR, MIN_CONDITIONS_TO_TRADE, SEED_CANDLES,
+    # optional toggles (added below safely if not present)
 )
 from candle_agg import CandleAggregator, TF_TO_PANDAS
-from oanda_stream import price_stream
+from oanda_stream import price_stream, OandaStreamError
 from oanda_history import fetch_candles
 from strategy_rules import compute_state
 from paper_engine import PaperEngine
 
+# ============================================================
+# BOOT LOGS (helps Railway debugging)
+# ============================================================
+print("[boot] app_web.py imported ✅")
+print("[boot] PORT env =", os.getenv("PORT"))
+print("[boot] OANDA_ENV =", OANDA_ENV)
+print("[boot] OANDA_TOKEN set? ", "YES" if (OANDA_TOKEN and len(OANDA_TOKEN) > 20) else "NO")
+print("[boot] OANDA_ACCOUNT_ID set? ", "YES" if (OANDA_ACCOUNT_ID and len(OANDA_ACCOUNT_ID) > 5) else "NO")
+
 # Default path for local development. Change this to /data/trades.db on Railway.
-DB_PATH = "/data/trades.db"
+DB_PATH = os.getenv("DB_PATH", "/data/trades.db")
+
+# Stream robustness
+STREAM_RETRY_SECONDS = float(os.getenv("STREAM_RETRY_SECONDS", "5"))
+STREAM_HEARTBEAT_EVERY = int(os.getenv("STREAM_HEARTBEAT_EVERY", "200"))  # ticks
+FAIL_FAST_IF_NO_OANDA = os.getenv("FAIL_FAST_IF_NO_OANDA", "0") == "1"
 
 def init_db():
     db_dir = os.path.dirname(DB_PATH)
@@ -45,6 +62,8 @@ AGGS = {inst: {tf: CandleAggregator(tf=tf, max_candles=800) for tf in SUPPORTED_
 CFG = {"EMA_FAST": EMA_FAST, "EMA_SLOW": EMA_SLOW, "RSI_LEN": RSI_LEN, "RSI_BUY_MAX": RSI_BUY_MAX, "RSI_SELL_MIN": RSI_SELL_MIN, "ATR_LEN": ATR_LEN, "SL_ATR": SL_ATR, "TP_RR": TP_RR, "USE_ENGULFING": USE_ENGULFING, "USE_SR": USE_SR, "SWING_LOOKBACK": SWING_LOOKBACK, "SR_TOL_ATR": SR_TOL_ATR, "MIN_CONDITIONS_TO_TRADE": MIN_CONDITIONS_TO_TRADE}
 PAPER = {inst: {tf: PaperEngine(instrument=inst, tf=tf, db_path=DB_PATH) for tf in SUPPORTED_TFS} for inst in SUPPORTED_INSTRUMENTS}
 
+STREAM_TASK: asyncio.Task | None = None
+
 def get_global_paper_stats():
     total_trades, total_wins, total_pnl, global_history = 0, 0, 0.0, []
     for inst in SUPPORTED_INSTRUMENTS:
@@ -57,34 +76,79 @@ def get_global_paper_stats():
                 t_enriched = t.copy()
                 t_enriched.update({"instrument": inst, "tf": tf})
                 global_history.append(t_enriched)
-    global_history.sort(key=lambda x: x["exit_time"], reverse=True)
+    global_history.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
     return {"trades": total_trades, "win_rate": round(total_wins/total_trades*100, 1) if total_trades else 0, "pnl": round(total_pnl, 2), "history": global_history[:15]}
 
 @app.on_event("startup")
 async def on_startup():
+    global STREAM_TASK
+    print("[startup] on_startup() entered ✅")
+
     init_db()
+
+    if (not OANDA_TOKEN or not OANDA_ACCOUNT_ID) and FAIL_FAST_IF_NO_OANDA:
+        raise RuntimeError("Missing OANDA_TOKEN or OANDA_ACCOUNT_ID (set Railway Variables).")
+
+    # Seed history for each instrument/tf
     for inst in SUPPORTED_INSTRUMENTS:
         for tf in SUPPORTED_TFS:
             try:
                 hist = await fetch_candles(inst, tf, count=SEED_CANDLES)
                 AGGS[inst][tf].seed_from_ohlc_df(hist)
                 PAPER[inst][tf].load_from_db()
-            except Exception as e: print(f"[seed][WARN] {inst} {tf} failed: {e}")
-    asyncio.create_task(stream_loop())
+                print(f"[seed] {inst} {tf}: {len(hist)} candles")
+            except Exception as e:
+                print(f"[seed][WARN] {inst} {tf} failed: {repr(e)}")
+
+    # Start streaming task (with reconnect)
+    STREAM_TASK = asyncio.create_task(stream_loop())
+    print("[startup] Live stream task started ✅")
 
 async def stream_loop():
+    """
+    Robust streaming loop:
+    - reconnects if OANDA drops
+    - never dies silently
+    - logs heartbeat every N ticks
+    """
     instruments = ",".join(SUPPORTED_INSTRUMENTS)
-    async for tick in price_stream(instruments):
-        inst, mid, ts = tick["instrument"], tick["mid"], tick["time"]
-        if inst in AGGS:
-            for tf, agg in AGGS[inst].items(): agg.update(ts, mid)
+    tick_count = 0
+
+    while True:
+        try:
+            if not OANDA_TOKEN or not OANDA_ACCOUNT_ID:
+                # In production, if env vars disappear/mis-set, we don’t want a silent task.
+                msg = "Missing OANDA_TOKEN or OANDA_ACCOUNT_ID (set env vars)."
+                print(f"[stream][WARN] {msg} retrying in {STREAM_RETRY_SECONDS}s…")
+                await asyncio.sleep(STREAM_RETRY_SECONDS)
+                continue
+
+            print(f"[stream] connecting… instruments={instruments}")
+            async for tick in price_stream(instruments):
+                inst, mid, ts = tick["instrument"], tick["mid"], tick["time"]
+
+                if inst in AGGS:
+                    for tf, agg in AGGS[inst].items():
+                        agg.update(ts, mid)
+
+                tick_count += 1
+                if tick_count % STREAM_HEARTBEAT_EVERY == 0:
+                    print(f"[stream] heartbeat ticks={tick_count} last={inst} mid={mid}")
+
+        except (OandaStreamError,) as e:
+            print(f"[stream][WARN] stream error: {repr(e)} — reconnecting in {STREAM_RETRY_SECONDS}s…")
+            await asyncio.sleep(STREAM_RETRY_SECONDS)
+        except Exception as e:
+            print(f"[stream][WARN] unexpected error: {repr(e)} — reconnecting in {STREAM_RETRY_SECONDS}s…")
+            await asyncio.sleep(STREAM_RETRY_SECONDS)
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "instruments": SUPPORTED_INSTRUMENTS, "tfs": SUPPORTED_TFS, "default_instrument": DEFAULT_INSTRUMENT, "default_tf": DEFAULT_TF})
 
 def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
-    if df is None or df.empty: return []
+    if df is None or df.empty:
+        return []
     d = df.tail(limit).copy().sort_index()
     return [{"t": int(ts.value // 1_000_000), "o": float(row["open"]), "h": float(row["high"]), "l": float(row["low"]), "c": float(row["close"])} for ts, row in d.iterrows()]
 
@@ -99,20 +163,37 @@ async def ws_endpoint(ws: WebSocket):
                 data = json.loads(msg)
                 sub.update({k: data[k] for k in ["instrument", "tf"] if k in data})
                 user_cfg.update({k: float(data[k]) for k in ["balance", "risk_pct"] if k in data})
-                if data.get("reset_paper"): PAPER[sub["instrument"]][sub["tf"]].reset(balance=user_cfg["balance"])
-            except asyncio.TimeoutError: pass
+                if data.get("reset_paper"):
+                    PAPER[sub["instrument"]][sub["tf"]].reset(balance=user_cfg["balance"])
+            except asyncio.TimeoutError:
+                pass
+
             inst, tf = sub["instrument"], sub["tf"]
             df = AGGS[inst][tf].to_df()
             state = compute_state(df, CFG)
+
             pe = PAPER[inst][tf]
             pe.update_on_new_closed_candle(df)
             pe.maybe_enter(state, df, user_cfg["balance"], user_cfg["risk_pct"])
+
             sizing = {"units": None, "lots": None}
             if state.get("ok") and state.get("side") in ("BUY", "SELL"):
                 p = state.get("plan", {})
                 if p.get("entry") and p.get("sl"):
                     u = PaperEngine.compute_units_quote_usd(user_cfg["balance"], user_cfg["risk_pct"], p["entry"], p["sl"])
                     sizing = {"units": float(u), "lots": float(PaperEngine.units_to_lots(u))}
-            await ws.send_text(json.dumps({"subscription": sub, "state": state, "sizing": sizing, "candles": df_to_candles_payload(df), "paper": pe.summary(), "global_stats": get_global_paper_stats(), "params": CFG}, default=str))
+
+            await ws.send_text(json.dumps({
+                "subscription": sub,
+                "state": state,
+                "sizing": sizing,
+                "candles": df_to_candles_payload(df),
+                "paper": pe.summary(),
+                "global_stats": get_global_paper_stats(),
+                "params": CFG,
+            }, default=str))
+
             await asyncio.sleep(0.5)
-    except WebSocketDisconnect: pass
+
+    except WebSocketDisconnect:
+        pass

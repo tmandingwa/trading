@@ -22,17 +22,21 @@ async def price_stream(instruments: str) -> AsyncIterator[Dict[str, Any]]:
     headers = {"Authorization": f"Bearer {OANDA_TOKEN}"}
     params = {"instruments": instruments}
 
+    # no read timeout; OANDA stream is long-lived
     timeout = httpx.Timeout(None, connect=10.0)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream("GET", url, headers=headers, params=params) as resp:
             if resp.status_code != 200:
                 raw = await resp.aread()
-                raise OandaStreamError(f"Stream HTTP {resp.status_code}: {raw[:200]!r}")
+                snippet = raw[:400]
+                raise OandaStreamError(f"Stream HTTP {resp.status_code}: {snippet!r}")
 
             async for line in resp.aiter_lines():
                 if not line:
                     continue
+
+                # OANDA sometimes sends HEARTBEAT / other types; ignore safely
                 try:
                     msg = json.loads(line)
                 except Exception:
@@ -46,8 +50,12 @@ async def price_stream(instruments: str) -> AsyncIterator[Dict[str, Any]]:
                 if not bids or not asks:
                     continue
 
-                bid = float(bids[0]["price"])
-                ask = float(asks[0]["price"])
+                try:
+                    bid = float(bids[0]["price"])
+                    ask = float(asks[0]["price"])
+                except Exception:
+                    continue
+
                 mid = 0.5 * (bid + ask)
 
                 yield {
