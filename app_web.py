@@ -79,6 +79,10 @@ def get_global_paper_stats():
     global_history.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
     return {"trades": total_trades, "win_rate": round(total_wins/total_trades*100, 1) if total_trades else 0, "pnl": round(total_pnl, 2), "history": global_history[:15]}
 
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True, "service": "trading", "streaming": True}
+
 @app.on_event("startup")
 async def on_startup():
     global STREAM_TASK
