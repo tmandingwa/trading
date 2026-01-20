@@ -6,6 +6,7 @@ from config import REST_URL, OANDA_TOKEN
 TF_TO_OANDA = {
     "M1": "M1",
     "M5": "M5",
+    "M15": "M15",   # ✅ ADDED
     "M30": "M30",
     "H1": "H1",
     "H4": "H4",
@@ -13,21 +14,12 @@ TF_TO_OANDA = {
 }
 
 async def fetch_candles(instrument: str, tf: str, count: int = 400) -> pd.DataFrame:
-    """
-    Fetch MID candles from OANDA REST and return CLOSED candles:
-    index UTC: candle start
-    cols: open,high,low,close
-    """
     if not OANDA_TOKEN:
         raise RuntimeError("Missing OANDA_TOKEN env var")
 
     url = f"{REST_URL}/v3/instruments/{instrument}/candles"
     headers = {"Authorization": f"Bearer {OANDA_TOKEN}"}
-    params = {
-        "granularity": TF_TO_OANDA[tf],
-        "count": int(count),
-        "price": "M",  # mid candles
-    }
+    params = {"granularity": TF_TO_OANDA[tf], "count": int(count), "price": "M"}
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.get(url, headers=headers, params=params)
@@ -44,13 +36,11 @@ async def fetch_candles(instrument: str, tf: str, count: int = 400) -> pd.DataFr
             "time": t,
             "open": float(m["o"]),
             "high": float(m["h"]),
-            "low": float(m["l"]),
-            "close": float(m["c"]),
+            "low":  float(m["l"]),
+            "close":float(m["c"]),
         })
 
     df = pd.DataFrame(rows)
     if df.empty:
         return pd.DataFrame(columns=["open", "high", "low", "close"])
-
-    df = df.set_index("time").sort_index()
-    return df
+    return df.set_index("time").sort_index()

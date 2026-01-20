@@ -7,6 +7,7 @@ from typing import Optional
 TF_TO_PANDAS = {
     "M1": "1min",
     "M5": "5min",
+    "M15": "15min",   # ✅ ADDED
     "M30": "30min",
     "H1": "1h",
     "H4": "4h",
@@ -65,7 +66,6 @@ class CandleAggregator:
             self.current = Candle(start=start, open=price, high=price, low=price, close=price)
             return None
 
-        # new candle started => close the previous one
         if start > self.current.start:
             just_closed = self.current
             self.closed.append(just_closed)
@@ -74,7 +74,6 @@ class CandleAggregator:
             self.current = Candle(start=start, open=price, high=price, low=price, close=price)
             return just_closed
 
-        # update current candle
         self.current.high = max(self.current.high, price)
         self.current.low = min(self.current.low, price)
         self.current.close = price
@@ -88,9 +87,9 @@ class CandleAggregator:
             {
                 "open": [c.open for c in self.closed],
                 "high": [c.high for c in self.closed],
-                "low": [c.low for c in self.closed],
-                "close": [c.close for c in self.closed],
+                "low":  [c.low for c in self.closed],
+                "close":[c.close for c in self.closed],
             },
             index=pd.DatetimeIndex(idx, tz="UTC"),
         )
-        return df.sort_index()
+        return df

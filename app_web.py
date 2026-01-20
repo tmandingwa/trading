@@ -20,7 +20,9 @@ from config import (
     EMA_FAST, EMA_SLOW, RSI_LEN, RSI_BUY_MAX, RSI_SELL_MIN,
     ATR_LEN, SL_ATR, TP_RR, USE_ENGULFING, USE_SR, SWING_LOOKBACK,
     SR_TOL_ATR, MIN_CONDITIONS_TO_TRADE, SEED_CANDLES,
+    SUPPORTED_INSTRUMENTS, SUPPORTED_TFS,
 )
+
 
 from candle_agg import CandleAggregator, TF_TO_PANDAS
 from oanda_stream import price_stream, OandaStreamError
@@ -117,9 +119,10 @@ if os.path.exists(STATIC_DIR):
 else:
     print("[boot] No static/ folder (OK)", flush=True)
 
+# NOTE: SUPPORTED_INSTRUMENTS / SUPPORTED_TFS come from config.py.
+# Safety: ensure configured TFs are supported by our resampler map
+SUPPORTED_TFS = [tf for tf in SUPPORTED_TFS if tf in TF_TO_PANDAS]
 
-SUPPORTED_INSTRUMENTS = ["EUR_USD", "GBP_USD", "XAU_USD"]
-SUPPORTED_TFS = list(TF_TO_PANDAS.keys())
 
 AGGS = {
     inst: {tf: CandleAggregator(tf=tf, max_candles=800) for tf in SUPPORTED_TFS}
