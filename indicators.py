@@ -2,6 +2,10 @@
 import numpy as np
 import pandas as pd
 
+# ------------------------
+# Core indicators (existing)
+# ------------------------
+
 def rsi(close: pd.Series, length: int = 14) -> pd.Series:
     d = close.diff()
     up = d.clip(lower=0)
@@ -56,19 +60,18 @@ def adx(df: pd.DataFrame, length: int = 14) -> pd.Series:
     dx = 100 * (plus_di - minus_di).abs() / ((plus_di + minus_di) + 1e-12)
     return dx.rolling(length, min_periods=length).mean()
 
-# --- Bill Williams core ---
+# ------------------------
+# Bill Williams (existing)
+# ------------------------
 
 def alligator(df: pd.DataFrame):
-    # Median price
     m = (df["high"] + df["low"]) / 2.0
-    # Simple approximation using EMA (SMMA would be closer; EMA works well in practice)
     jaw = ema(m, 13).shift(8)
     teeth = ema(m, 8).shift(5)
     lips = ema(m, 5).shift(3)
     return jaw, teeth, lips
 
 def fractals(df: pd.DataFrame):
-    # Classic 2-bar fractal
     h, l = df["high"], df["low"]
     fh = (h.shift(2) < h.shift(1)) & (h.shift(1) < h) & (h > h.shift(-1)) & (h.shift(-1) > h.shift(-2))
     fl = (l.shift(2) > l.shift(1)) & (l.shift(1) > l) & (l < l.shift(-1)) & (l.shift(-1) < l.shift(-2))
@@ -80,7 +83,125 @@ def awesome_oscillator(df: pd.DataFrame):
     m = (df["high"] + df["low"]) / 2.0
     return sma(m, 5) - sma(m, 34)
 
-# Existing ones you already had
+# ------------------------
+# NEW: Bollinger Bands + StdDev regime
+# ------------------------
+
+def bollinger(close: pd.Series, length: int = 20, n_std: float = 2.0):
+    mid = close.rolling(length, min_periods=length).mean()
+    sd = close.rolling(length, min_periods=length).std(ddof=0)
+    upper = mid + n_std * sd
+    lower = mid - n_std * sd
+    width = (upper - lower) / (mid.abs() + 1e-12)
+    return mid, upper, lower, sd, width
+
+def rolling_zscore(x: pd.Series, length: int = 50) -> pd.Series:
+    m = x.rolling(length, min_periods=length).mean()
+    s = x.rolling(length, min_periods=length).std(ddof=0)
+    return (x - m) / (s + 1e-12)
+
+# ------------------------
+# NEW: Adaptive MA (KAMA)
+# ------------------------
+
+def kama(close: pd.Series, er_len: int = 10, fast: int = 2, slow: int = 30) -> pd.Series:
+    """
+    Kaufman Adaptive Moving Average.
+    - er_len: efficiency ratio window
+    - fast/slow: smoothing constants bounds
+    """
+    change = close.diff(er_len).abs()
+    volatility = close.diff().abs().rolling(er_len, min_periods=er_len).sum()
+    er = change / (volatility + 1e-12)
+
+    fast_sc = 2.0 / (fast + 1.0)
+    slow_sc = 2.0 / (slow + 1.0)
+    sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
+
+    out = pd.Series(index=close.index, dtype=float)
+    out.iloc[:er_len] = np.nan
+
+    # seed
+    first = close.iloc[er_len]
+    out.iloc[er_len] = first
+
+    for i in range(er_len + 1, len(close)):
+        prev = out.iloc[i - 1]
+        if not np.isfinite(prev):
+            prev = close.iloc[i - 1]
+        out.iloc[i] = prev + sc.iloc[i] * (close.iloc[i] - prev)
+
+    return out
+
+# ------------------------
+# NEW: Parabolic SAR
+# ------------------------
+
+def psar(df: pd.DataFrame, af_step: float = 0.02, af_max: float = 0.2) -> pd.Series:
+    """
+    Parabolic SAR (classic). Returns SAR series.
+    """
+    high = df["high"].values
+    low = df["low"].values
+    n = len(df)
+    sar = np.full(n, np.nan, dtype=float)
+    if n < 3:
+        return pd.Series(sar, index=df.index)
+
+    # initial trend guess
+    up = df["close"].iloc[1] > df["close"].iloc[0]
+    ep = high[0] if up else low[0]
+    af = af_step
+    sar[0] = low[0] if up else high[0]
+
+    for i in range(1, n):
+        prev_sar = sar[i - 1]
+
+        # basic SAR step
+        sar_i = prev_sar + af * (ep - prev_sar)
+
+        # clamp with prior 2 lows/highs
+        if up:
+            if i >= 2:
+                sar_i = min(sar_i, low[i - 1], low[i - 2])
+            else:
+                sar_i = min(sar_i, low[i - 1])
+        else:
+            if i >= 2:
+                sar_i = max(sar_i, high[i - 1], high[i - 2])
+            else:
+                sar_i = max(sar_i, high[i - 1])
+
+        # check reversal
+        if up:
+            if low[i] < sar_i:
+                up = False
+                sar_i = ep
+                ep = low[i]
+                af = af_step
+            else:
+                if high[i] > ep:
+                    ep = high[i]
+                    af = min(af + af_step, af_max)
+        else:
+            if high[i] > sar_i:
+                up = True
+                sar_i = ep
+                ep = high[i]
+                af = af_step
+            else:
+                if low[i] < ep:
+                    ep = low[i]
+                    af = min(af + af_step, af_max)
+
+        sar[i] = sar_i
+
+    return pd.Series(sar, index=df.index)
+
+# ------------------------
+# Existing patterns (kept)
+# ------------------------
+
 def bullish_engulf(df: pd.DataFrame) -> pd.Series:
     o, c = df["open"], df["close"]
     po, pc = o.shift(1), c.shift(1)

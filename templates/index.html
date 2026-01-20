@@ -91,7 +91,7 @@
         .ready { background: var(--success-bg); color: var(--success-text); border: none; }
         .open { background: var(--open-bg); color: var(--open-text); border: none; }
 
-        .scroll-area { flex-grow: 1; overflow-y: auto; min-height: 0; }
+        .scroll-area { flex-grow: 1; overflow-y: auto; min-height: 0okit; }
 
         .history-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; table-layout: fixed; }
         .history-table th {
@@ -99,7 +99,11 @@
             border-bottom: 1px solid var(--border); font-weight: 600;
             position: sticky; top: 0; background: var(--card); z-index: 2;
         }
-        .history-table td { padding: 0.75rem 0.5rem; border-bottom: 1px solid var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .history-table td {
+            padding: 0.75rem 0.5rem;
+            border-bottom: 1px solid var(--secondary);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
 
         /* Updated widths to include Status */
         .col-time { width: 14%; }
@@ -120,6 +124,39 @@
         /* ✅ Make Global Performance a fixed scrollable box so page fits one screen */
         .global-card { height: 240px; }
         .global-card .scroll-area { max-height: 170px; }
+
+        /* ✅ Hover tooltip */
+        .trade-tooltip {
+            position: fixed;
+            z-index: 9999;
+            display: none;
+            background: rgba(17, 24, 39, 0.95);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-size: 12px;
+            line-height: 1.35;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+            max-width: 260px;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+        .trade-tooltip .tt-title {
+            font-weight: 800;
+            margin-bottom: 6px;
+            letter-spacing: 0.2px;
+        }
+        .trade-tooltip .tt-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        }
+        .trade-tooltip .tt-key { color: rgba(255,255,255,0.75); }
+        .trade-tooltip .tt-val { font-weight: 800; }
+        .trade-tooltip .tt-sl { color: #fca5a5; }
+        .trade-tooltip .tt-tp { color: #86efac; }
     </style>
 </head>
 <body>
@@ -201,6 +238,9 @@
         </div>
     </div>
 
+    <!-- ✅ Tooltip element -->
+    <div id="tradeTooltip" class="trade-tooltip"></div>
+
 <script>
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${location.host}/ws`);
@@ -243,6 +283,76 @@
         return `$${v.toFixed(2)}`;
     }
 
+    function fmtPx(x) {
+        if (x === null || x === undefined) return "--";
+        const v = Number(x);
+        if (Number.isNaN(v)) return "--";
+        return v.toFixed(4);
+    }
+
+    // ✅ Tooltip helpers
+    const tooltip = document.getElementById("tradeTooltip");
+
+    function buildTooltipHTML(t) {
+        const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
+        const title = `${t.instrument || ""} ${t.tf || ""} · ${t.side || ""} · ${status}`.trim();
+
+        // support multiple key names (safe)
+        const entry = (t.entry ?? t.entry_price ?? t.entry_px ?? null);
+        const sl    = (t.sl ?? t.stop_loss ?? null);
+        const tp    = (t.tp ?? t.take_profit ?? null);
+        const exit  = (t.exit ?? t.exit_price ?? t.exit_px ?? null);
+        const pnl   = (t.pnl_usd ?? t.pnl ?? null);
+
+        const rows = [
+            ["Entry", fmtPx(entry), ""],
+            ["SL",    fmtPx(sl), "tt-sl"],
+            ["TP",    fmtPx(tp), "tt-tp"],
+        ];
+
+        if (status !== "OPEN") {
+            rows.push(["Exit", fmtPx(exit), ""]);
+            rows.push(["PnL",  (pnl === null || pnl === undefined) ? "--" : fmtMoney(pnl), ""]);
+        }
+
+        return `
+            <div class="tt-title">${title}</div>
+            ${rows.map(([k,v,cls]) => `
+                <div class="tt-row">
+                    <span class="tt-key">${k}</span>
+                    <span class="tt-val ${cls}">${v}</span>
+                </div>
+            `).join("")}
+        `;
+    }
+
+    function showTooltipAt(x, y, html) {
+        tooltip.innerHTML = html;
+        tooltip.style.display = "block";
+
+        // position with screen bounds clamp
+        const pad = 12;
+        const rect = tooltip.getBoundingClientRect();
+        let left = x + 12;
+        let top  = y + 12;
+
+        if (left + rect.width + pad > window.innerWidth) left = x - rect.width - 12;
+        if (top + rect.height + pad > window.innerHeight) top = y - rect.height - 12;
+
+        tooltip.style.left = `${Math.max(pad, left)}px`;
+        tooltip.style.top  = `${Math.max(pad, top)}px`;
+    }
+
+    function hideTooltip() {
+        tooltip.style.display = "none";
+    }
+
+    // Hide on scroll (keeps it clean)
+    document.querySelectorAll(".scroll-area").forEach(el => {
+        el.addEventListener("scroll", hideTooltip, { passive: true });
+    });
+    window.addEventListener("resize", hideTooltip);
+
     ws.onmessage = (ev) => {
         const data = JSON.parse(ev.data);
         const st = data.state;
@@ -280,7 +390,6 @@
         }
 
         if (gs) {
-            // Use DB-driven totals if available, else fallback to old fields
             const pnl = (gs.pnl_total_db !== undefined) ? gs.pnl_total_db : gs.pnl;
             const wr = (gs.win_rate_db !== undefined) ? gs.win_rate_db : gs.win_rate;
             const trades = (gs.closed_trades !== undefined) ? gs.closed_trades : gs.trades;
@@ -288,18 +397,21 @@
             document.getElementById("global-metrics").innerHTML =
                 `WR: ${wr}% | PnL: <span style="color:${pnl >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">${fmtMoney(pnl)}</span> | Trades: ${trades} | Open: ${gs.open_trades ?? 0}`;
 
-            // Prefer new combined timeline (OPEN + CLOSED), fallback to old history
             const rows = gs.timeline && gs.timeline.length ? gs.timeline : (gs.history || []);
             if (rows && rows.length > 0) {
-                document.getElementById("global-history-body").innerHTML = rows.map(t => {
+                document.getElementById("global-history-body").innerHTML = rows.map((t, idx) => {
                     const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
                     const isOpen = status === "OPEN";
                     const timeShow = isOpen ? t.entry_time : t.exit_time;
                     const outcome = isOpen ? "—" : (t.outcome || t.result || "—");
                     const pnlVal = isOpen ? null : t.pnl_usd;
 
+                    // ✅ store full trade payload in data-trade for hover
+                    const tradeJson = encodeURIComponent(JSON.stringify(t));
+
                     return `
-                        <tr>
+                        <tr class="trade-row"
+                            data-trade="${tradeJson}">
                             <td class="col-time">${formatTime(timeShow)}</td>
                             <td class="col-pair" style="font-weight:700;">${t.instrument} ${t.tf}</td>
                             <td class="col-side">${t.side}</td>
@@ -315,6 +427,33 @@
                             <td class="col-rsn" style="font-style:italic;">${t.reason || ""}</td>
                         </tr>`;
                 }).join('');
+
+                // ✅ attach hover handlers after render
+                document.querySelectorAll(".trade-row").forEach(row => {
+                    row.addEventListener("mouseenter", (e) => {
+                        try {
+                            const raw = decodeURIComponent(row.getAttribute("data-trade") || "");
+                            const t = JSON.parse(raw);
+                            showTooltipAt(e.clientX, e.clientY, buildTooltipHTML(t));
+                        } catch {
+                            // ignore
+                        }
+                    });
+                    row.addEventListener("mousemove", (e) => {
+                        if (tooltip.style.display !== "block") return;
+                        const x = e.clientX, y = e.clientY;
+                        const rect = tooltip.getBoundingClientRect();
+                        let left = x + 12;
+                        let top  = y + 12;
+                        const pad = 12;
+                        if (left + rect.width + pad > window.innerWidth) left = x - rect.width - 12;
+                        if (top + rect.height + pad > window.innerHeight) top = y - rect.height - 12;
+                        tooltip.style.left = `${Math.max(pad, left)}px`;
+                        tooltip.style.top  = `${Math.max(pad, top)}px`;
+                    });
+                    row.addEventListener("mouseleave", hideTooltip);
+                });
+
             } else {
                 document.getElementById("global-history-body").innerHTML =
                     `<tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>`;
