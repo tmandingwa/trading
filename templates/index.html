@@ -145,8 +145,11 @@
         #apply { background: var(--primary); color: var(--primary-foreground); }
         #resetPaper { background: var(--secondary); color: var(--secondary-foreground); border: 1px solid var(--border); }
 
+        /* ✅ 1-line space between Apply/Reset and market list */
+        .btn-row { display:flex; gap:0.5rem; margin-bottom: 0.75rem; }
+
         .market-status {
-            margin-top: 0.55rem;
+            margin-top: 0;
             font-size: 0.72rem;
             color: var(--muted-foreground);
             display: flex;
@@ -204,7 +207,7 @@
             z-index: 2;
         }
         .history-table td {
-            padding: 0.52rem 0.45rem; /* tighter (helps 3 rows fit) */
+            padding: 0.52rem 0.45rem;
             border-bottom: 1px solid var(--secondary);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
@@ -224,15 +227,12 @@
 
         #chart { flex-grow: 1; width: 100%; height: 100%; }
 
-        /* ✅ Global card compact + only ~3 rows visible without scrolling */
         .global-card { height: 235px; }
         .global-card .scroll-area {
-            /* header row ~34px + 3 body rows ~ (3*30px) ≈ 124–140px */
             height: 138px;
             max-height: 138px;
         }
 
-        /* ✅ Tooltips */
         .trade-tooltip {
             position: fixed;
             z-index: 9999;
@@ -264,7 +264,6 @@
 
         .reason-cell { cursor: help; }
 
-        /* ✅ Reports button + popup calendar */
         .header-left { display:flex; align-items:center; gap:0.6rem; }
         .reports-btn{
             display:inline-flex;
@@ -361,129 +360,128 @@
 </head>
 <body>
 
-    <div class="topbar">
-        <h2 id="appTitle">FX TA Dashboard</h2>
-        <a class="resume-link" id="resumeLink" href="#" download>
-            Download Timothy Mandingwa Resume
-        </a>
-    </div>
+<div class="topbar">
+    <h2 id="appTitle">FX TA Dashboard</h2>
+    <a class="resume-link" id="resumeLink" href="#" download>
+        Download Timothy Mandingwa Resume
+    </a>
+</div>
 
-    <div class="dashboard-grid">
-        <div class="card" style="grid-row: span 2;">
-            <div class="card-header">Configuration</div>
-            <div class="controls-grid">
-                <div class="field-group">
-                    <label>Pair</label>
-                    <select id="instrument">
-                        {% for inst in instruments %}
-                        <option value="{{inst}}">{{inst}}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="field-group">
-                    <label>Timeframe</label>
-                    <select id="tf">
-                        {% for t in tfs %}
-                        <option value="{{t}}">{{t}}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="field-group">
-                    <label>Balance (USD)</label>
-                    <input id="balance" type="number" value="1000" style="width:100px">
-                </div>
-                <div class="field-group">
-                    <label>Risk %</label>
-                    <input id="risk_pct" type="number" value="1.0" style="width:100px">
-                </div>
+<div class="dashboard-grid">
+    <div class="card" style="grid-row: span 2;">
+        <div class="card-header">Configuration</div>
+        <div class="controls-grid">
+            <div class="field-group">
+                <label>Pair</label>
+                <select id="instrument">
+                    {% for inst in instruments %}
+                    <option value="{{inst}}">{{inst}}</option>
+                    {% endfor %}
+                </select>
             </div>
-
-            <div style="display:flex; gap:0.5rem;">
-                <button id="apply">Apply</button>
-                <button id="resetPaper">Reset</button>
+            <div class="field-group">
+                <label>Timeframe</label>
+                <select id="tf">
+                    {% for t in tfs %}
+                    <option value="{{t}}">{{t}}</option>
+                    {% endfor %}
+                </select>
             </div>
-
-            <div class="market-status" id="marketStatus">
-                <div class="market-pill"><span class="dot"></span> London: --</div>
-                <div class="market-pill"><span class="dot"></span> New York: --</div>
-                <div class="market-pill"><span class="dot"></span> Tokyo: --</div>
+            <div class="field-group">
+                <label>Balance (USD)</label>
+                <input id="balance" type="number" value="1000" style="width:100px">
+            </div>
+            <div class="field-group">
+                <label>Risk %</label>
+                <input id="risk_pct" type="number" value="1.0" style="width:100px">
             </div>
         </div>
 
-        <div class="card" style="grid-row: span 2; padding: 0;">
-            <div id="chart"></div>
+        <div class="btn-row">
+            <button id="apply">Apply</button>
+            <button id="resetPaper">Reset</button>
         </div>
 
-        <div class="card">
-            <div class="card-header">Live Status <div id="status-badge-container"></div></div>
-            <div id="price-main" class="price-display">--.-----</div>
-            <div class="metric-row">
-                <div class="metric-box"><span class="metric-label">RSI</span><span class="metric-value" id="rsi-val">--.--</span></div>
-                <div class="metric-box"><span class="metric-label">ATR</span><span class="metric-value" id="atr-val">--.-----</span></div>
-            </div>
-            <div id="reason" style="font-size:0.8rem; color:var(--muted-foreground); background:var(--secondary); padding:0.5rem; border-radius:8px;">Scanning...</div>
-        </div>
-
-        <div class="card">
-            <div class="card-header">Local Engine <span id="local-stats"></span></div>
-            <div id="paperPositionContainer" class="scroll-area">
-                <div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:1.4rem 1rem;">No active trades.</div>
-            </div>
-        </div>
-
-        <div class="card global-card" style="grid-column: 1 / -1; position: relative;">
-            <div class="card-header">
-                <div class="header-left">
-                    <span>Global Performance (All Pairs)</span>
-                    <div class="reports-btn" id="reportsBtn" title="Download daily PDF report">
-                        <span aria-hidden="true">📅</span>
-                        <span>Reports</span>
-                    </div>
-                </div>
-                <span id="global-metrics"></span>
-            </div>
-
-            <div class="calendar-pop" id="calendarPop">
-                <div class="cal-title">
-                    <span id="calLabel">Select day</span>
-                    <button class="cal-close" id="calClose" type="button">✕</button>
-                </div>
-
-                <input id="reportDate" type="date" />
-                <div class="cal-hint" id="calHint">
-                    Pick any <b>past day</b> to download its PDF report. Today and future days are not downloadable.
-                </div>
-
-                <div class="cal-state">
-                    <div class="pill ready"><span class="mini-dot"></span> Past day</div>
-                    <div class="pill today"><span class="mini-dot"></span> Today</div>
-                    <div class="pill future"><span class="mini-dot"></span> Future</div>
-                </div>
-            </div>
-
-            <!-- ✅ this box shows ~3 rows, rest via scroll -->
-            <div class="scroll-area">
-                <table class="history-table">
-                    <thead>
-                        <tr>
-                            <th class="col-time">Time</th>
-                            <th class="col-pair">Pair / TF</th>
-                            <th class="col-side">Side</th>
-                            <th class="col-status">Status</th>
-                            <th class="col-out">Result</th>
-                            <th class="col-pnl">PnL</th>
-                            <th class="col-rsn">Reason</th>
-                        </tr>
-                    </thead>
-                    <tbody id="global-history-body">
-                        <tr><td colspan="7" style="text-align:center; padding:1.4rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>
-                    </tbody>
-                </table>
-            </div>
+        <div class="market-status" id="marketStatus">
+            <div class="market-pill"><span class="dot"></span> London: --</div>
+            <div class="market-pill"><span class="dot"></span> New York: --</div>
+            <div class="market-pill"><span class="dot"></span> Tokyo: --</div>
         </div>
     </div>
 
-    <div id="tradeTooltip" class="trade-tooltip"></div>
+    <div class="card" style="grid-row: span 2; padding: 0;">
+        <div id="chart"></div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Live Status <div id="status-badge-container"></div></div>
+        <div id="price-main" class="price-display">--.-----</div>
+        <div class="metric-row">
+            <div class="metric-box"><span class="metric-label">RSI</span><span class="metric-value" id="rsi-val">--.--</span></div>
+            <div class="metric-box"><span class="metric-label">ATR</span><span class="metric-value" id="atr-val">--.-----</span></div>
+        </div>
+        <!-- ✅ removed the crossed "reason" box -->
+    </div>
+
+    <div class="card">
+        <div class="card-header">Local Engine <span id="local-stats"></span></div>
+        <div id="paperPositionContainer" class="scroll-area">
+            <div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:1.4rem 1rem;">No active trades.</div>
+        </div>
+    </div>
+
+    <div class="card global-card" style="grid-column: 1 / -1; position: relative;">
+        <div class="card-header">
+            <div class="header-left">
+                <span>Global Performance (All Pairs)</span>
+                <div class="reports-btn" id="reportsBtn" title="Download daily PDF report">
+                    <span aria-hidden="true">📅</span>
+                    <span>Reports</span>
+                </div>
+            </div>
+            <span id="global-metrics"></span>
+        </div>
+
+        <div class="calendar-pop" id="calendarPop">
+            <div class="cal-title">
+                <span id="calLabel">Select day</span>
+                <button class="cal-close" id="calClose" type="button">✕</button>
+            </div>
+
+            <input id="reportDate" type="date" />
+            <div class="cal-hint" id="calHint">
+                Pick any <b>past day</b> to download its PDF report. Today and future days are not downloadable.
+            </div>
+
+            <div class="cal-state">
+                <div class="pill ready"><span class="mini-dot"></span> Past day</div>
+                <div class="pill today"><span class="mini-dot"></span> Today</div>
+                <div class="pill future"><span class="mini-dot"></span> Future</div>
+            </div>
+        </div>
+
+        <div class="scroll-area">
+            <table class="history-table">
+                <thead>
+                <tr>
+                    <th class="col-time">Time</th>
+                    <th class="col-pair">Pair / TF</th>
+                    <th class="col-side">Side</th>
+                    <th class="col-status">Status</th>
+                    <th class="col-out">Result</th>
+                    <th class="col-pnl">PnL</th>
+                    <th class="col-rsn">Reason</th>
+                </tr>
+                </thead>
+                <tbody id="global-history-body">
+                <tr><td colspan="7" style="text-align:center; padding:1.4rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div id="tradeTooltip" class="trade-tooltip"></div>
 
 <script>
     const RESUME_URL = "/static/Timothy_Mandingwa_Resume.pdf";
@@ -500,23 +498,16 @@
 
     // ===== Chart
     const chartEl = document.getElementById('chart');
+
+    // ✅ IMPORTANT:
+    // Lightweight-charts renders the time axis in the browser's LOCAL time by default.
+    // Your input `time` should be UTC seconds (which you already send).
+    // So: DO NOT override tick formatting with a different timezone (it can create mismatches).
     const chart = LightweightCharts.createChart(chartEl, {
         layout: { background: { color: 'transparent' }, textColor: '#71717a' },
         grid: { vertLines: { color: '#e4e4e7' }, horzLines: { color: '#e4e4e7' } },
         localization: {
-            locale: userLocale,
-            timeFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return new Intl.DateTimeFormat(userLocale, {
-                    year: 'numeric',
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: false,
-                    timeZone: userTZ
-                }).format(date);
-            }
+            locale: userLocale
         },
         timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#e4e4e7' },
     });
@@ -525,11 +516,7 @@
     const candleSeries = chart.addCandlestickSeries({
         upColor: '#16a34a',
         downColor: '#dc2626',
-        priceFormat: {
-            type: 'price',
-            precision: 5,
-            minMove: 0.00001
-        }
+        priceFormat: { type: 'price', precision: 5, minMove: 0.00001 }
     });
 
     // ===== Helpers
@@ -758,14 +745,17 @@
             document.getElementById("price-main").innerText = fmtPx5(st.close);
             document.getElementById("rsi-val").innerText = Number(st.rsi).toFixed(2);
             document.getElementById("atr-val").innerText = fmtPx5(st.atr);
-            document.getElementById("reason").innerText = st.reason || "Scanning...";
+
             document.getElementById("status-badge-container").innerHTML =
                 st.side !== "NO_TRADE" ? `<span class="status-badge ready">${st.side}</span>` : "";
         }
 
+        // ✅ X-axis local time fix:
+        // Pass UTC seconds. Browser displays it in local time automatically.
         if (data.candles) {
             candleSeries.setData(data.candles.map(c => ({
-                time: c.t/1000, open: c.o, high: c.h, low: c.l, close: c.c
+                time: Math.floor(c.t / 1000), // seconds UTC
+                open: c.o, high: c.h, low: c.l, close: c.c
             })));
         }
 

@@ -7,7 +7,7 @@ from typing import Optional
 TF_TO_PANDAS = {
     "M1": "1min",
     "M5": "5min",
-    "M15": "15min",   # ✅ ADDED
+    "M15": "15min",
     "M30": "30min",
     "H1": "1h",
     "H4": "4h",
@@ -28,11 +28,14 @@ class Candle:
 class CandleAggregator:
     """
     Aggregates mid prices to OHLC candles for a timeframe.
-    Stores only CLOSED candles in self.closed.
+    - self.closed stores CLOSED candles
+    - self.current stores the IN-FORMATION candle (updates each tick)
+
     update() returns:
       - None if candle not closed
-      - Candle if candle was just closed (so caller can act on close events)
+      - Candle if candle was just closed
     """
+
     def __init__(self, tf: str, max_candles: int = 800):
         self.tf = tf
         self.max_candles = max_candles
@@ -66,30 +69,52 @@ class CandleAggregator:
             self.current = Candle(start=start, open=price, high=price, low=price, close=price)
             return None
 
+        # New candle interval -> close previous
         if start > self.current.start:
             just_closed = self.current
             self.closed.append(just_closed)
+
             if len(self.closed) > self.max_candles:
                 self.closed = self.closed[-self.max_candles:]
+
             self.current = Candle(start=start, open=price, high=price, low=price, close=price)
             return just_closed
 
+        # Update forming candle
         self.current.high = max(self.current.high, price)
         self.current.low = min(self.current.low, price)
         self.current.close = price
         return None
 
-    def to_df(self) -> pd.DataFrame:
-        if not self.closed:
-            return pd.DataFrame(columns=["open", "high", "low", "close"])
-        idx = [c.start for c in self.closed]
+    def to_df(self, include_current: bool = False) -> pd.DataFrame:
+        """
+        include_current=False  -> only closed candles (for trading engine signals)
+        include_current=True   -> closed + current forming candle (for UI real-time display)
+        """
+        cols = ["open", "high", "low", "close"]
+
+        if not self.closed and not (include_current and self.current):
+            return pd.DataFrame(columns=cols)
+
+        items = list(self.closed)
+
+        if include_current and self.current is not None:
+            items = items + [self.current]
+
+        idx = [c.start for c in items]
         df = pd.DataFrame(
             {
-                "open": [c.open for c in self.closed],
-                "high": [c.high for c in self.closed],
-                "low":  [c.low for c in self.closed],
-                "close":[c.close for c in self.closed],
+                "open": [c.open for c in items],
+                "high": [c.high for c in items],
+                "low":  [c.low for c in items],
+                "close":[c.close for c in items],
             },
             index=pd.DatetimeIndex(idx, tz="UTC"),
         )
         return df
+
+    def last_mid(self) -> Optional[float]:
+        """Latest mid price from current forming candle, if available."""
+        if self.current is None:
+            return None
+        return float(self.current.close)

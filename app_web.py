@@ -23,7 +23,6 @@ from config import (
     SUPPORTED_INSTRUMENTS, SUPPORTED_TFS,
 )
 
-
 from candle_agg import CandleAggregator, TF_TO_PANDAS
 from oanda_stream import price_stream, OandaStreamError
 from oanda_history import fetch_candles
@@ -31,16 +30,13 @@ from strategy_rules import compute_state
 from paper_engine import PaperEngine
 
 # ============================================================
-# PATHS (make templates/static robust on Railway)
+# PATHS
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 INDEX_TEMPLATE_PATH = os.path.join(TEMPLATES_DIR, "index.html")
 
-# ============================================================
-# BOOT LOGS (helps Railway debugging)
-# ============================================================
 print("[boot] app_web.py imported ✅", flush=True)
 print("[boot] BASE_DIR =", BASE_DIR, flush=True)
 print("[boot] TEMPLATES_DIR exists? ", os.path.exists(TEMPLATES_DIR), flush=True)
@@ -50,23 +46,17 @@ print("[boot] OANDA_ENV =", OANDA_ENV, flush=True)
 print("[boot] OANDA_TOKEN set? ", "YES" if (OANDA_TOKEN and len(OANDA_TOKEN) > 20) else "NO", flush=True)
 print("[boot] OANDA_ACCOUNT_ID set? ", "YES" if (OANDA_ACCOUNT_ID and len(OANDA_ACCOUNT_ID) > 5) else "NO", flush=True)
 
-# Default path for local development. Change this to /data/trades.db on Railway.
 DB_PATH = os.getenv("DB_PATH", "/data/trades.db")
 
-# Stream robustness
 STREAM_RETRY_SECONDS = float(os.getenv("STREAM_RETRY_SECONDS", "5"))
-STREAM_HEARTBEAT_EVERY = int(os.getenv("STREAM_HEARTBEAT_EVERY", "200"))  # ticks
+STREAM_HEARTBEAT_EVERY = int(os.getenv("STREAM_HEARTBEAT_EVERY", "200"))
 FAIL_FAST_IF_NO_OANDA = os.getenv("FAIL_FAST_IF_NO_OANDA", "0") == "1"
 
-# ============================================================
-# AUTO-ENGINE (background trading for ALL pairs/TFs)
-# ============================================================
-AUTO_ENGINE_ALL = os.getenv("AUTO_ENGINE_ALL", "1") == "1"          # default ON
-AUTO_ENGINE_SLEEP = float(os.getenv("AUTO_ENGINE_SLEEP", "0.8"))    # seconds
+AUTO_ENGINE_ALL = os.getenv("AUTO_ENGINE_ALL", "1") == "1"
+AUTO_ENGINE_SLEEP = float(os.getenv("AUTO_ENGINE_SLEEP", "0.8"))
 AUTO_BALANCE = float(os.getenv("AUTO_BALANCE", "1000"))
 AUTO_RISK_PCT = float(os.getenv("AUTO_RISK_PCT", "1.0"))
 
-# How many rows to keep in global UI timeline (OPEN + CLOSED)
 GLOBAL_TRADE_HISTORY_LIMIT = int(os.getenv("GLOBAL_TRADE_HISTORY_LIMIT", "5000"))
 GLOBAL_OPEN_LIMIT = int(os.getenv("GLOBAL_OPEN_LIMIT", "200"))
 GLOBAL_CLOSED_LIMIT = int(os.getenv("GLOBAL_CLOSED_LIMIT", "5000"))
@@ -74,10 +64,8 @@ GLOBAL_CLOSED_LIMIT = int(os.getenv("GLOBAL_CLOSED_LIMIT", "5000"))
 STREAM_TASK: asyncio.Task | None = None
 ENGINE_TASK: asyncio.Task | None = None
 
-# Per pair/tf guard: prevent double-processing between WS loop + background engine
 ENGINE_LOCKS: Dict[Tuple[str, str], asyncio.Lock] = {}
-LAST_ENGINE_CANDLE: Dict[Tuple[str, str], int] = {}  # last processed candle time (ns int)
-
+LAST_ENGINE_CANDLE: Dict[Tuple[str, str], int] = {}  # last processed CLOSED candle time (ns)
 
 def init_db():
     db_dir = os.path.dirname(DB_PATH)
@@ -94,35 +82,26 @@ def init_db():
             "CREATE TABLE IF NOT EXISTS trade_history (id INTEGER PRIMARY KEY AUTOINCREMENT, instrument TEXT, tf TEXT, side TEXT, entry_time TEXT, exit_time TEXT, entry REAL, exit_px REAL, sl REAL, tp REAL, units REAL, pnl_usd REAL, outcome TEXT, reason TEXT)"
         )
 
-
 def db_fetchone(query: str, params: tuple = ()):
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(query, params)
         return cur.fetchone()
-
 
 def db_fetchall(query: str, params: tuple = ()):
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(query, params)
         return cur.fetchall()
 
-
 app = FastAPI()
-
-# Templates (absolute directory)
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-# Static (optional) - only mount if folder exists
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     print("[boot] Static mounted at /static ✅", flush=True)
 else:
     print("[boot] No static/ folder (OK)", flush=True)
 
-# NOTE: SUPPORTED_INSTRUMENTS / SUPPORTED_TFS come from config.py.
-# Safety: ensure configured TFs are supported by our resampler map
 SUPPORTED_TFS = [tf for tf in SUPPORTED_TFS if tf in TF_TO_PANDAS]
-
 
 AGGS = {
     inst: {tf: CandleAggregator(tf=tf, max_candles=800) for tf in SUPPORTED_TFS}
@@ -150,15 +129,10 @@ PAPER = {
     for inst in SUPPORTED_INSTRUMENTS
 }
 
-# Init locks for all
 for inst in SUPPORTED_INSTRUMENTS:
     for tf in SUPPORTED_TFS:
         ENGINE_LOCKS[(inst, tf)] = asyncio.Lock()
 
-
-# ============================================================
-# SIMPLE REQUEST LOGGER (CRITICAL for Railway routing debug)
-# ============================================================
 @app.middleware("http")
 async def log_http_requests(request: Request, call_next):
     t0 = time.time()
@@ -172,17 +146,7 @@ async def log_http_requests(request: Request, call_next):
         print(f"[http][ERR] {request.method} {request.url.path} crashed after {dt:.1f}ms: {repr(e)}", flush=True)
         raise
 
-
 def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> Dict[str, Any]:
-    """
-    Global metrics from DB (authoritative):
-    - open positions count + list
-    - closed trades count + list
-    - wins/losses
-    - win rate
-    - pnl total
-    """
-    # OPEN
     open_rows = db_fetchall(
         """
         SELECT instrument, tf, side, entry_time, entry, sl, tp, units, reason
@@ -203,7 +167,6 @@ def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> 
     open_count_row = db_fetchone("SELECT COUNT(*) FROM open_positions")
     open_count = int(open_count_row[0]) if open_count_row else 0
 
-    # CLOSED (history)
     closed_count_row = db_fetchone("SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND exit_time != ''")
     closed_count = int(closed_count_row[0]) if closed_count_row else 0
 
@@ -216,21 +179,15 @@ def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> 
     wins = int(wins_row[0]) if wins_row else 0
     losses = int(losses_row[0]) if losses_row else 0
 
-    # Fallback: classify by pnl if outcome isn't strict.
     if (wins + losses) == 0:
-        wins2_row = db_fetchone(
-            "SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND pnl_usd > 0"
-        )
-        losses2_row = db_fetchone(
-            "SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND pnl_usd <= 0"
-        )
+        wins2_row = db_fetchone("SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND pnl_usd > 0")
+        losses2_row = db_fetchone("SELECT COUNT(*) FROM trade_history WHERE exit_time IS NOT NULL AND pnl_usd <= 0")
         wins = int(wins2_row[0]) if wins2_row else 0
         losses = int(losses2_row[0]) if losses2_row else 0
 
     pnl_row = db_fetchone("SELECT COALESCE(SUM(pnl_usd), 0) FROM trade_history")
     pnl_total = float(pnl_row[0]) if pnl_row else 0.0
 
-    # recent closed trades
     closed_rows = db_fetchall(
         """
         SELECT instrument, tf, side, entry_time, exit_time, entry, exit_px, sl, tp, units, pnl_usd, outcome, reason
@@ -265,16 +222,7 @@ def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> 
         "closed_history": closed_trades,
     }
 
-
 def build_global_timeline(limit: int = 5000) -> List[Dict[str, Any]]:
-    """
-    Combined timeline:
-    - OPEN trades from open_positions
-    - CLOSED trades from trade_history
-    Sorted newest first by (exit_time if exists else entry_time).
-    This is what your UI will scroll through to show all historical trades + open trades.
-    """
-    # OPEN (all / limited)
     open_rows = db_fetchall(
         """
         SELECT instrument, tf, side, entry_time, entry, sl, tp, units, reason
@@ -284,25 +232,17 @@ def build_global_timeline(limit: int = 5000) -> List[Dict[str, Any]]:
         """,
         (GLOBAL_OPEN_LIMIT,),
     )
-    open_items: List[Dict[str, Any]] = []
+    open_items = []
     for r in open_rows:
         open_items.append({
             "status": "OPEN",
-            "instrument": r[0],
-            "tf": r[1],
-            "side": r[2],
-            "entry_time": r[3],
-            "exit_time": None,
-            "entry": r[4],
-            "sl": r[5],
-            "tp": r[6],
-            "units": r[7],
-            "pnl_usd": None,
-            "outcome": None,
+            "instrument": r[0], "tf": r[1], "side": r[2],
+            "entry_time": r[3], "exit_time": None,
+            "entry": r[4], "sl": r[5], "tp": r[6],
+            "units": r[7], "pnl_usd": None, "outcome": None,
             "reason": r[8],
         })
 
-    # CLOSED (all / limited)
     closed_rows = db_fetchall(
         """
         SELECT instrument, tf, side, entry_time, exit_time, entry, exit_px, sl, tp, units, pnl_usd, outcome, reason
@@ -313,23 +253,15 @@ def build_global_timeline(limit: int = 5000) -> List[Dict[str, Any]]:
         """,
         (GLOBAL_CLOSED_LIMIT,),
     )
-    closed_items: List[Dict[str, Any]] = []
+    closed_items = []
     for r in closed_rows:
         closed_items.append({
             "status": "CLOSED",
-            "instrument": r[0],
-            "tf": r[1],
-            "side": r[2],
-            "entry_time": r[3],
-            "exit_time": r[4],
-            "entry": r[5],
-            "exit_px": r[6],
-            "sl": r[7],
-            "tp": r[8],
-            "units": r[9],
-            "pnl_usd": r[10],
-            "outcome": r[11],
-            "reason": r[12],
+            "instrument": r[0], "tf": r[1], "side": r[2],
+            "entry_time": r[3], "exit_time": r[4],
+            "entry": r[5], "exit_px": r[6],
+            "sl": r[7], "tp": r[8], "units": r[9],
+            "pnl_usd": r[10], "outcome": r[11], "reason": r[12],
         })
 
     def _ts_key(x: Dict[str, Any]) -> str:
@@ -337,16 +269,9 @@ def build_global_timeline(limit: int = 5000) -> List[Dict[str, Any]]:
 
     all_items = open_items + closed_items
     all_items.sort(key=_ts_key, reverse=True)
-
     return all_items[:limit]
 
-
 def get_global_paper_stats():
-    """
-    Keep your existing behavior (so nothing breaks),
-    but enrich with DB-global metrics (open/closed/wins/losses lists)
-    AND provide a combined timeline (OPEN + CLOSED) for a scrollable history box.
-    """
     total_trades, total_wins, total_pnl, global_history = 0, 0, 0.0, []
     for inst in SUPPORTED_INSTRUMENTS:
         for tf in SUPPORTED_TFS:
@@ -365,13 +290,11 @@ def get_global_paper_stats():
     timeline = build_global_timeline(limit=GLOBAL_TRADE_HISTORY_LIMIT)
 
     return {
-        # old fields (UI already expects these)
         "trades": int(total_trades),
         "win_rate": round(total_wins / total_trades * 100, 1) if total_trades else 0,
         "pnl": round(float(total_pnl), 2),
         "history": global_history[:15],
 
-        # DB fields (richer metrics + lists)
         "open_trades": dbm["open_trades"],
         "closed_trades": dbm["closed_trades"],
         "wins": dbm["wins"],
@@ -381,15 +304,12 @@ def get_global_paper_stats():
         "open_positions": dbm["open_positions"],
         "closed_history": dbm["closed_history"],
 
-        # ✅ NEW: full scrollable history (OPEN + CLOSED)
         "timeline": timeline,
     }
-
 
 @app.get("/ping")
 async def ping():
     return PlainTextResponse("pong")
-
 
 @app.get("/healthz")
 async def healthz():
@@ -404,27 +324,6 @@ async def healthz():
         "global_trade_history_limit": GLOBAL_TRADE_HISTORY_LIMIT,
     })
 
-
-@app.get("/readyz")
-async def readyz():
-    try:
-        inst = DEFAULT_INSTRUMENT if DEFAULT_INSTRUMENT in SUPPORTED_INSTRUMENTS else SUPPORTED_INSTRUMENTS[0]
-        tf = DEFAULT_TF if DEFAULT_TF in SUPPORTED_TFS else SUPPORTED_TFS[0]
-        df = AGGS[inst][tf].to_df()
-        ok = df is not None and len(df) >= 50
-        return JSONResponse({"ready": bool(ok), "candles": int(len(df)) if df is not None else 0})
-    except Exception as e:
-        return JSONResponse({"ready": False, "error": repr(e)}, status_code=500)
-
-
-@app.get("/metricsz")
-async def metricsz():
-    """
-    Quick endpoint to view global metrics in JSON (helps debugging without UI changes).
-    """
-    return JSONResponse(get_global_paper_stats())
-
-
 @app.on_event("startup")
 async def on_startup():
     global STREAM_TASK, ENGINE_TASK
@@ -435,7 +334,6 @@ async def on_startup():
     if (not OANDA_TOKEN or not OANDA_ACCOUNT_ID) and FAIL_FAST_IF_NO_OANDA:
         raise RuntimeError("Missing OANDA_TOKEN or OANDA_ACCOUNT_ID (set Railway Variables).")
 
-    # Seed history for each instrument/tf
     for inst in SUPPORTED_INSTRUMENTS:
         for tf in SUPPORTED_TFS:
             try:
@@ -453,7 +351,6 @@ async def on_startup():
         ENGINE_TASK = asyncio.create_task(engine_loop_all())
         print("[startup] Auto-engine (ALL pairs/TFs) started ✅", flush=True)
 
-
 async def stream_loop():
     instruments = ",".join(SUPPORTED_INSTRUMENTS)
     tick_count = 0
@@ -461,8 +358,7 @@ async def stream_loop():
     while True:
         try:
             if not OANDA_TOKEN or not OANDA_ACCOUNT_ID:
-                msg = "Missing OANDA_TOKEN or OANDA_ACCOUNT_ID (set env vars)."
-                print(f"[stream][WARN] {msg} retrying in {STREAM_RETRY_SECONDS}s…", flush=True)
+                print(f"[stream][WARN] Missing OANDA creds. retry in {STREAM_RETRY_SECONDS}s…", flush=True)
                 await asyncio.sleep(STREAM_RETRY_SECONDS)
                 continue
 
@@ -486,7 +382,6 @@ async def stream_loop():
             print(f"[stream][WARN] unexpected error: {repr(e)} — reconnecting in {STREAM_RETRY_SECONDS}s…", flush=True)
             await asyncio.sleep(STREAM_RETRY_SECONDS)
 
-
 def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
     if df is None or df.empty:
         return []
@@ -502,12 +397,10 @@ def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
         for ts, row in d.iterrows()
     ]
 
-
 async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: float):
     """
-    Safe single-step engine process:
-    - lock per pair/tf
-    - only process a candle once (prevents duplicates across ws loop + background loop)
+    Engine uses CLOSED candles ONLY (no forming candle).
+    UI will use include_current=True separately.
     """
     key = (inst, tf)
     lock = ENGINE_LOCKS.get(key)
@@ -516,43 +409,32 @@ async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: floa
         lock = ENGINE_LOCKS[key]
 
     async with lock:
-        df = AGGS[inst][tf].to_df()
+        agg = AGGS[inst][tf]
+        df = agg.to_df(include_current=False)  # ✅ CLOSED ONLY for engine
         if df is None or df.empty or len(df) < 50:
-            return None, None
+            return None, df
 
-        # Use last index timestamp as "latest candle marker"
         try:
-            latest_ts_ns = int(df.index[-1].value)
+            latest_closed_ts_ns = int(df.index[-1].value)
         except Exception:
-            latest_ts_ns = int(time.time() * 1e9)
+            latest_closed_ts_ns = int(time.time() * 1e9)
 
-        # Only process if candle marker advanced
         last = LAST_ENGINE_CANDLE.get(key)
-        if last is not None and latest_ts_ns <= last:
-            # No new candle since last engine run
+        if last is not None and latest_closed_ts_ns <= last:
             state = compute_state(df, CFG)
             return state, df
 
-        # mark as processed BEFORE running actions to avoid re-entry loops on fast schedules
-        LAST_ENGINE_CANDLE[key] = latest_ts_ns
+        LAST_ENGINE_CANDLE[key] = latest_closed_ts_ns
 
         state = compute_state(df, CFG)
         pe = PAPER[inst][tf]
 
-        # exits/updates
         pe.update_on_new_closed_candle(df)
-
-        # entries
         pe.maybe_enter(state, df, balance, risk_pct)
 
         return state, df
 
-
 async def engine_loop_all():
-    """
-    Background engine loop:
-    trades/logs ALL pairs + ALL timeframes even if not selected in UI.
-    """
     print("[engine] engine_loop_all started ✅", flush=True)
     while True:
         try:
@@ -564,13 +446,8 @@ async def engine_loop_all():
 
         await asyncio.sleep(AUTO_ENGINE_SLEEP)
 
-
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    """
-    Serve UI if template exists. Otherwise return a fallback HTML page
-    (so Railway always shows something on /).
-    """
     try:
         if os.path.exists(INDEX_TEMPLATE_PATH):
             return templates.TemplateResponse(
@@ -584,29 +461,18 @@ async def root(request: Request):
                 },
             )
 
-        # Fallback HTML: proves routing works even if templates missing
         html = f"""
-        <html>
-          <head><title>FX TA Dashboard</title></head>
-          <body style="font-family:Arial; padding:24px;">
-            <h2>FX TA Dashboard (Fallback)</h2>
-            <p><b>Status:</b> Running ✅</p>
-            <p><b>Note:</b> templates/index.html was not found in this deployment.</p>
-            <p>Check: <a href="/healthz">/healthz</a> | <a href="/readyz">/readyz</a> | <a href="/ping">/ping</a> | <a href="/metricsz">/metricsz</a></p>
-            <pre>BASE_DIR={BASE_DIR}
-TEMPLATES_DIR={TEMPLATES_DIR}
-INDEX_TEMPLATE_PATH={INDEX_TEMPLATE_PATH}</pre>
-          </body>
-        </html>
+        <html><body style="font-family:Arial; padding:24px;">
+        <h2>FX TA Dashboard (Fallback)</h2>
+        <p>templates/index.html not found.</p>
+        <p><a href="/healthz">/healthz</a> | <a href="/ping">/ping</a></p>
+        <pre>BASE_DIR={BASE_DIR}\nTEMPLATES_DIR={TEMPLATES_DIR}\nINDEX_TEMPLATE_PATH={INDEX_TEMPLATE_PATH}</pre>
+        </body></html>
         """
         return HTMLResponse(content=html, status_code=200)
 
     except Exception as e:
-        return HTMLResponse(
-            content=f"<h3>UI failed but backend running</h3><pre>{repr(e)}</pre>",
-            status_code=200
-        )
-
+        return HTMLResponse(content=f"<h3>UI failed but backend running</h3><pre>{repr(e)}</pre>", status_code=200)
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
@@ -640,10 +506,14 @@ async def ws_endpoint(ws: WebSocket):
                 await asyncio.sleep(0.5)
                 continue
 
-            # IMPORTANT: Use guarded engine processing to prevent duplicates with background loop
-            state, df = await process_engine_once(inst, tf, user_cfg["balance"], user_cfg["risk_pct"])
+            # Engine state (closed candles)
+            state, df_closed = await process_engine_once(inst, tf, user_cfg["balance"], user_cfg["risk_pct"])
 
-            if df is None:
+            agg = AGGS[inst][tf]
+            df_display = agg.to_df(include_current=True)  # ✅ UI sees forming candle
+            live_mid = agg.last_mid()
+
+            if df_display is None or df_display.empty:
                 await ws.send_text(json.dumps({
                     "subscription": sub,
                     "error": f"No candles yet for {inst}/{tf}",
@@ -651,6 +521,11 @@ async def ws_endpoint(ws: WebSocket):
                 }, default=str))
                 await asyncio.sleep(0.5)
                 continue
+
+            # ✅ Make displayed "close" be live mid (not last closed)
+            if state and isinstance(state, dict) and live_mid is not None:
+                state = state.copy()
+                state["close"] = float(live_mid)
 
             pe = PAPER[inst][tf]
 
@@ -667,9 +542,9 @@ async def ws_endpoint(ws: WebSocket):
                 "subscription": sub,
                 "state": state,
                 "sizing": sizing,
-                "candles": df_to_candles_payload(df),
+                "candles": df_to_candles_payload(df_display),  # ✅ includes current candle
                 "paper": pe.summary(),
-                "global_stats": get_global_paper_stats(),  # includes timeline now
+                "global_stats": get_global_paper_stats(),
                 "params": CFG,
             }, default=str))
 
