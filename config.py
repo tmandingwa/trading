@@ -3,24 +3,27 @@ import os
 from dataclasses import dataclass
 
 # ============================================================
-# OANDA (Required by oanda_stream.py)
+# OANDA (Used by oanda_stream.py and oanda_history.py)
 # ============================================================
 OANDA_TOKEN = os.getenv("OANDA_TOKEN", "")
 OANDA_ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID", "")
 
-# Accept both: "practice"/"live" (your current style) and "PRACTICE"/"LIVE"
+# Accept: practice/live (any casing)
 OANDA_ENV = os.getenv("OANDA_ENV", "practice").strip().lower()  # practice | live
 
-# Base URLs (REST + STREAM)
+# Base URLs
 if OANDA_ENV == "live":
-    OANDA_API_URL = "https://api-fxtrade.oanda.com"
+    REST_URL = "https://api-fxtrade.oanda.com"
     STREAM_URL = "https://stream-fxtrade.oanda.com"
 else:
-    OANDA_API_URL = "https://api-fxpractice.oanda.com"
+    REST_URL = "https://api-fxpractice.oanda.com"
     STREAM_URL = "https://stream-fxpractice.oanda.com"
 
-# Optional: fail fast in production (Railway) if creds are missing
-# You can disable this by setting REQUIRE_OANDA_CREDS=0
+# Backwards-compatible aliases (some files may import these)
+OANDA_API_URL = REST_URL
+OANDA_STREAM_URL = STREAM_URL
+
+# Optional: allow UI to start without creds
 REQUIRE_OANDA_CREDS = os.getenv("REQUIRE_OANDA_CREDS", "1") == "1"
 if REQUIRE_OANDA_CREDS:
     if not OANDA_TOKEN:
@@ -29,23 +32,23 @@ if REQUIRE_OANDA_CREDS:
         raise RuntimeError("Missing env var OANDA_ACCOUNT_ID")
 
 # ============================================================
-# DASHBOARD + ENGINE SCOPE
+# DASHBOARD + ENGINE SCOPE (your requested scope)
 # ============================================================
 SUPPORTED_INSTRUMENTS = ["EUR_USD"]
 SUPPORTED_TFS = ["M15", "M30"]
 
 DEFAULT_INSTRUMENT = "EUR_USD"
-DEFAULT_TF = "M15"  # M15, M30
+DEFAULT_TF = "M15"
 
 # ============================================================
-# Trading rule parameters (your existing rule config preserved)
+# Trading rule parameters
 # ============================================================
 EMA_FAST = 20
 EMA_SLOW = 50
 
 RSI_LEN = 14
-RSI_BUY_MAX = 35     # buy when RSI <= this (oversold-ish)
-RSI_SELL_MIN = 65    # sell when RSI >= this (overbought-ish)
+RSI_BUY_MAX = 35
+RSI_SELL_MIN = 65
 
 ATR_LEN = 14
 SL_ATR = 1.2
@@ -57,7 +60,6 @@ SWING_LOOKBACK = 20
 SR_TOL_ATR = 0.35
 MIN_CONDITIONS_TO_TRADE = 2
 
-# How many candles to seed for each TF on startup
 SEED_CANDLES = 600
 
 # ============================================================
@@ -89,8 +91,10 @@ class TAConfig:
 
 CFG = {
     "OANDA_ENV": OANDA_ENV,
-    "OANDA_API_URL": OANDA_API_URL,
+    "REST_URL": REST_URL,
     "STREAM_URL": STREAM_URL,
+    "OANDA_API_URL": OANDA_API_URL,
+    "OANDA_STREAM_URL": OANDA_STREAM_URL,
 
     "SUPPORTED_INSTRUMENTS": SUPPORTED_INSTRUMENTS,
     "SUPPORTED_TFS": SUPPORTED_TFS,
