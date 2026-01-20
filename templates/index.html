@@ -28,7 +28,7 @@
 
             --navy: #0b1f3b;
 
-            /* Reports colors */
+            /* Reports states */
             --rep-ready-bg: #dcfce7;
             --rep-ready-tx: #166534;
             --rep-miss-bg: #f4f4f5;
@@ -180,50 +180,7 @@
         .global-card { height: 290px; }
         .global-card .scroll-area { max-height: 190px; }
 
-        /* ✅ Reports bar */
-        .reports-wrap{
-            display:flex;
-            flex-direction:column;
-            gap:0.35rem;
-            margin: 0.25rem 0 0.75rem 0;
-        }
-        .reports-title{
-            font-size:0.72rem;
-            font-weight:800;
-            color: var(--muted-foreground);
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-        }
-        .reports-bar{
-            display:flex;
-            flex-wrap:wrap;
-            gap:0.35rem;
-        }
-        .day-chip{
-            border: 1px solid var(--border);
-            border-radius: 9999px;
-            padding: 0.25rem 0.55rem;
-            font-size: 0.72rem;
-            font-weight: 800;
-            cursor: pointer;
-            background: var(--rep-miss-bg);
-            color: var(--rep-miss-tx);
-            user-select:none;
-            min-width: 34px;
-            text-align:center;
-        }
-        .day-chip.ready{
-            background: var(--rep-ready-bg);
-            color: var(--rep-ready-tx);
-            border: none;
-        }
-        .day-chip.today{
-            background: var(--rep-today-bg);
-            color: var(--rep-today-tx);
-            border: none;
-        }
-        .day-chip:hover{ filter: brightness(0.98); }
-
+        /* ✅ Tooltips */
         .trade-tooltip {
             position: fixed;
             z-index: 9999;
@@ -261,6 +218,106 @@
         .trade-tooltip .tt-tp { color: #86efac; }
 
         .reason-cell { cursor: help; }
+
+        /* ✅ Reports button + popup calendar */
+        .header-left {
+            display:flex;
+            align-items:center;
+            gap:0.6rem;
+        }
+        .reports-btn{
+            display:inline-flex;
+            align-items:center;
+            gap:0.45rem;
+            border: 1px solid var(--border);
+            background: var(--secondary);
+            color: var(--secondary-foreground);
+            padding: 0.25rem 0.55rem;
+            border-radius: 9999px;
+            font-size: 0.72rem;
+            font-weight: 900;
+            cursor: pointer;
+            user-select:none;
+            text-transform: none;
+        }
+        .reports-btn:hover{ filter: brightness(0.98); }
+
+        .calendar-pop {
+            position: absolute;
+            display: none;
+            z-index: 999;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.75rem;
+            box-shadow: 0 12px 28px rgba(0,0,0,0.12);
+            min-width: 250px;
+        }
+        .calendar-pop .cal-title{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:0.5rem;
+            margin-bottom: 0.55rem;
+        }
+        .calendar-pop .cal-title span{
+            font-size: 0.75rem;
+            font-weight: 900;
+            color: var(--muted-foreground);
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+        .calendar-pop .cal-close{
+            border: 1px solid var(--border);
+            background: var(--secondary);
+            color: var(--secondary-foreground);
+            border-radius: 10px;
+            padding: 0.2rem 0.45rem;
+            font-weight: 900;
+            cursor:pointer;
+            font-size: 0.72rem;
+        }
+        .calendar-pop input[type="date"]{
+            width: 100%;
+            height: 2.25rem;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            padding: 0 0.65rem;
+            font-weight: 800;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        }
+        .cal-hint{
+            margin-top: 0.5rem;
+            font-size: 0.72rem;
+            color: var(--muted-foreground);
+            line-height: 1.35;
+        }
+        .cal-state{
+            margin-top: 0.55rem;
+            display:flex;
+            gap:0.4rem;
+            flex-wrap:wrap;
+        }
+        .pill{
+            display:inline-flex;
+            align-items:center;
+            gap:0.35rem;
+            border-radius: 9999px;
+            padding: 0.18rem 0.5rem;
+            font-size: 0.7rem;
+            font-weight: 900;
+            border: 1px solid var(--border);
+            background: var(--secondary);
+            color: var(--muted-foreground);
+        }
+        .pill .mini-dot{
+            width:8px;height:8px;border-radius:9999px;background:#9ca3af;
+        }
+        .pill.ready{ background: var(--rep-ready-bg); color: var(--rep-ready-tx); border: none; }
+        .pill.ready .mini-dot{ background:#22c55e; }
+        .pill.today{ background: var(--rep-today-bg); color: var(--rep-today-tx); border: none; }
+        .pill.today .mini-dot{ background:#6366f1; }
+        .pill.future{ opacity: 0.65; }
     </style>
 </head>
 <body>
@@ -333,16 +390,38 @@
             </div>
         </div>
 
-        <div class="card global-card" style="grid-column: 1 / -1;">
+        <div class="card global-card" style="grid-column: 1 / -1; position: relative;">
             <div class="card-header">
-                <span>Global Performance (All Pairs)</span>
+                <div class="header-left">
+                    <span>Global Performance (All Pairs)</span>
+
+                    <!-- ✅ Reports calendar button -->
+                    <div class="reports-btn" id="reportsBtn" title="Download daily PDF report">
+                        <span aria-hidden="true">📅</span>
+                        <span>Reports</span>
+                    </div>
+                </div>
                 <span id="global-metrics"></span>
             </div>
 
-            <!-- ✅ Month Reports bar -->
-            <div class="reports-wrap">
-                <div class="reports-title" id="reportsTitle">Current Month Reports</div>
-                <div class="reports-bar" id="monthReports"></div>
+            <!-- ✅ Calendar popup -->
+            <div class="calendar-pop" id="calendarPop">
+                <div class="cal-title">
+                    <span id="calLabel">Select day</span>
+                    <button class="cal-close" id="calClose" type="button">✕</button>
+                </div>
+
+                <input id="reportDate" type="date" />
+
+                <div class="cal-hint" id="calHint">
+                    Pick any <b>past day</b> to download its PDF report. Today and future days are not downloadable.
+                </div>
+
+                <div class="cal-state">
+                    <div class="pill ready"><span class="mini-dot"></span> Past day</div>
+                    <div class="pill today"><span class="mini-dot"></span> Today</div>
+                    <div class="pill future"><span class="mini-dot"></span> Future</div>
+                </div>
             </div>
 
             <div class="scroll-area">
@@ -381,6 +460,7 @@
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
+    // ===== Chart
     const chartEl = document.getElementById('chart');
     const chart = LightweightCharts.createChart(chartEl, {
         layout: { background: { color: 'transparent' }, textColor: '#71717a' },
@@ -404,6 +484,7 @@
     });
     const candleSeries = chart.addCandlestickSeries({ upColor: '#16a34a', downColor: '#dc2626' });
 
+    // ===== Helpers
     function toDateAny(ts) {
         if (ts === null || ts === undefined || ts === "") return null;
         if (typeof ts === "number") {
@@ -439,42 +520,22 @@
         return `$${v.toFixed(2)}`;
     }
 
-    function fmtPx(x) {
-        if (x === null || x === undefined) return "--";
-        const v = Number(x);
-        if (Number.isNaN(v)) return "--";
-        return v.toFixed(4);
-    }
-
-    // =========================
-    // ✅ Market open status (London, NY, Tokyo)
-    // =========================
+    // ===== Market sessions
     function getPartsInTZ(tz) {
         const dtf = new Intl.DateTimeFormat("en-US", {
-            timeZone: tz,
-            weekday: "short",
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: false
+            timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false
         });
         const parts = dtf.formatToParts(new Date());
         const map = {};
         parts.forEach(p => { map[p.type] = p.value; });
         return map;
     }
-
-    function isWeekdayShort(wd) {
-        return ["Mon","Tue","Wed","Thu","Fri"].includes(wd);
-    }
+    function isWeekdayShort(wd) { return ["Mon","Tue","Wed","Thu","Fri"].includes(wd); }
 
     function isSessionOpen(tz, startHH, startMM, endHH, endMM) {
         const p = getPartsInTZ(tz);
-        const wd = p.weekday;
-        if (!isWeekdayShort(wd)) return false;
-
-        const hh = Number(p.hour);
-        const mm = Number(p.minute);
-        const mins = hh * 60 + mm;
+        if (!isWeekdayShort(p.weekday)) return false;
+        const mins = Number(p.hour) * 60 + Number(p.minute);
         const start = startHH * 60 + startMM;
         const end = endHH * 60 + endMM;
         return (mins >= start && mins <= end);
@@ -504,24 +565,63 @@
     renderMarketStatus();
     setInterval(renderMarketStatus, 30_000);
 
-    // =========================
-    // ✅ Month Reports UI (NUMBERS ONLY)
-    // =========================
-    function monthShortName(d) {
-        return new Intl.DateTimeFormat(userLocale, { month: 'short', timeZone: userTZ }).format(d);
-    }
+    // ===== Reports calendar behavior
+    const reportsBtn = document.getElementById("reportsBtn");
+    const calendarPop = document.getElementById("calendarPop");
+    const calClose = document.getElementById("calClose");
+    const reportDate = document.getElementById("reportDate");
+    const calLabel = document.getElementById("calLabel");
 
-    function daysInMonth(year, monthIndex0) {
-        return new Date(year, monthIndex0 + 1, 0).getDate();
-    }
-
-    function ymdInTZ(dateObj) {
+    function todayYMD() {
         const parts = new Intl.DateTimeFormat("en-CA", {
-            timeZone: userTZ,
-            year: "numeric", month: "2-digit", day: "2-digit"
-        }).formatToParts(dateObj).reduce((acc,p)=>{acc[p.type]=p.value; return acc;}, {});
+            timeZone: userTZ, year: "numeric", month: "2-digit", day: "2-digit"
+        }).formatToParts(new Date()).reduce((acc,p)=>{acc[p.type]=p.value; return acc;}, {});
         return `${parts.year}-${parts.month}-${parts.day}`;
     }
+
+    function ymdToDateLocal(ymd) {
+        // Treat as UTC date then display restrictions based on string compare
+        const [y,m,d] = ymd.split("-").map(Number);
+        return new Date(Date.UTC(y, m-1, d));
+    }
+
+    function setDateBounds() {
+        // allow selecting any past day (no min), but set max to yesterday
+        const t = todayYMD();
+        const [y, m, d] = t.split("-").map(Number);
+        const todayUTC = new Date(Date.UTC(y, m-1, d));
+        const ydayUTC = new Date(todayUTC.getTime() - 24*60*60*1000);
+        const yday = ydayUTC.toISOString().slice(0,10);
+
+        reportDate.max = yday;      // cannot choose today/future
+        reportDate.value = yday;    // default to yesterday
+        calLabel.innerText = `Reports (${t} today)`;
+    }
+
+    function openCalendar() {
+        setDateBounds();
+        const btnRect = reportsBtn.getBoundingClientRect();
+        const parentRect = calendarPop.parentElement.getBoundingClientRect();
+
+        calendarPop.style.display = "block";
+        // place below button
+        calendarPop.style.left = `${btnRect.left - parentRect.left}px`;
+        calendarPop.style.top  = `${btnRect.bottom - parentRect.top + 8}px`;
+    }
+
+    function closeCalendar() { calendarPop.style.display = "none"; }
+
+    reportsBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (calendarPop.style.display === "block") closeCalendar();
+        else openCalendar();
+    });
+
+    calClose.addEventListener("click", closeCalendar);
+
+    document.addEventListener("click", (e) => {
+        if (!calendarPop.contains(e.target) && e.target !== reportsBtn) closeCalendar();
+    });
 
     function downloadReport(ymd) {
         const a = document.createElement("a");
@@ -532,79 +632,45 @@
         a.remove();
     }
 
-    function renderMonthReportsFromTrades(tradesLikeRows) {
-        const now = new Date();
-        const y = Number(new Intl.DateTimeFormat("en-CA", { timeZone: userTZ, year: "numeric" }).format(now));
-        const m = Number(new Intl.DateTimeFormat("en-CA", { timeZone: userTZ, month: "2-digit" }).format(now)) - 1;
+    reportDate.addEventListener("change", () => {
+        const ymd = reportDate.value; // YYYY-MM-DD
+        if (!ymd) return;
+        downloadReport(ymd);
+        closeCalendar();
+    });
 
-        document.getElementById("reportsTitle").innerText = `${monthShortName(now)} Reports`;
-
-        const dim = daysInMonth(y, m);
-        const todayDay = Number(new Intl.DateTimeFormat("en-CA", { timeZone: userTZ, day: "2-digit" }).format(now));
-
-        const readyDays = new Set();
-        (tradesLikeRows || []).forEach(t => {
-            const ts = t.exit_time || t.closed_ts || t.closed_ts_epoch || t.entry_time || t.opened_ts;
-            const d = toDateAny(ts);
-            if (!d) return;
-            const ymd = ymdInTZ(d);
-            const [yy, mm, dd] = ymd.split("-").map(Number);
-            if (yy !== y || (mm - 1) !== m) return;
-            readyDays.add(dd);
-        });
-
-        const bar = document.getElementById("monthReports");
-        bar.innerHTML = "";
-
-        for (let day = 1; day <= dim; day++) {
-            const chip = document.createElement("div");
-            chip.className = "day-chip";
-            chip.textContent = String(day); // ✅ numbers only
-
-            if (readyDays.has(day)) chip.classList.add("ready");
-            if (day === todayDay) chip.classList.add("today");
-
-            chip.title = readyDays.has(day) ? "Report ready" : "No trades logged for this day yet";
-
-            const ymd = `${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-            chip.onclick = () => {
-                // allow download for past days even if no trades (backend can return "empty report" PDF if you want)
-                if (day > todayDay) return;
-                downloadReport(ymd);
-            };
-
-            bar.appendChild(chip);
-        }
-    }
-
-    // =========================
-    // ✅ Tooltips
-    // =========================
+    // ===== Tooltip
     const tooltip = document.getElementById("tradeTooltip");
-
+    function escapeHTML(str) {
+        return (str || "").toString().replace(/[&<>"']/g, (m) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#39;",
+        }[m]));
+    }
     function showTooltipAt(x, y, html, mode) {
         tooltip.classList.toggle("reason", mode === "reason");
         tooltip.innerHTML = html;
         tooltip.style.display = "block";
-
         const pad = 12;
         const rect = tooltip.getBoundingClientRect();
         let left = x + 12;
         let top  = y + 12;
-
         if (left + rect.width + pad > window.innerWidth) left = x - rect.width - 12;
         if (top + rect.height + pad > window.innerHeight) top = y - rect.height - 12;
-
         tooltip.style.left = `${Math.max(pad, left)}px`;
         tooltip.style.top  = `${Math.max(pad, top)}px`;
     }
-
     function hideTooltip() {
         tooltip.style.display = "none";
         tooltip.classList.remove("reason");
     }
-
-    function fmtPxSafe(x){ return fmtPx(x); }
+    document.querySelectorAll(".scroll-area").forEach(el => {
+        el.addEventListener("scroll", hideTooltip, { passive: true });
+    });
+    window.addEventListener("resize", hideTooltip);
 
     function buildTradeLevelsHTML(t) {
         const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
@@ -614,22 +680,18 @@
         const sl    = (t.sl ?? t.stop_loss ?? null);
         const tp    = (t.tp ?? t.take_profit ?? null);
 
+        const fmtPx = (x) => {
+            const v = Number(x);
+            if (x === null || x === undefined || Number.isNaN(v)) return "--";
+            return v.toFixed(4);
+        };
+
         return `
             <div class="tt-title">${title}</div>
-            <div class="tt-row"><span class="tt-key">Entry</span><span class="tt-val">${fmtPxSafe(entry)}</span></div>
-            <div class="tt-row"><span class="tt-key">SL</span><span class="tt-val tt-sl">${fmtPxSafe(sl)}</span></div>
-            <div class="tt-row"><span class="tt-key">TP</span><span class="tt-val tt-tp">${fmtPxSafe(tp)}</span></div>
+            <div class="tt-row"><span class="tt-key">Entry</span><span class="tt-val">${fmtPx(entry)}</span></div>
+            <div class="tt-row"><span class="tt-key">SL</span><span class="tt-val tt-sl">${fmtPx(sl)}</span></div>
+            <div class="tt-row"><span class="tt-key">TP</span><span class="tt-val tt-tp">${fmtPx(tp)}</span></div>
         `;
-    }
-
-    function escapeHTML(str) {
-        return (str || "").toString().replace(/[&<>"']/g, (m) => ({
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            "\"": "&quot;",
-            "'": "&#39;",
-        }[m]));
     }
 
     function buildReasonHTML(t) {
@@ -645,14 +707,7 @@
         `;
     }
 
-    document.querySelectorAll(".scroll-area").forEach(el => {
-        el.addEventListener("scroll", hideTooltip, { passive: true });
-    });
-    window.addEventListener("resize", hideTooltip);
-
-    // =========================
-    // ✅ Live Updates
-    // =========================
+    // ===== Live updates
     ws.onmessage = (ev) => {
         const data = JSON.parse(ev.data);
         const st = data.state;
@@ -700,7 +755,6 @@
                 `WR: ${wr}% | PnL: <span style="color:${pnl >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">${fmtMoney(pnl)}</span> | Trades: ${trades} | Open: ${gs.open_trades ?? 0}`;
 
             const rows = gs.timeline && gs.timeline.length ? gs.timeline : (gs.history || []);
-            renderMonthReportsFromTrades(rows);
 
             if (rows && rows.length > 0) {
                 document.getElementById("global-history-body").innerHTML = rows.map((t) => {
@@ -709,7 +763,6 @@
                     const timeShow = isOpen ? t.entry_time : t.exit_time;
                     const outcome = isOpen ? "—" : (t.outcome || t.result || "—");
                     const pnlVal = isOpen ? null : t.pnl_usd;
-
                     const tradeJson = encodeURIComponent(JSON.stringify(t));
                     const reasonText = (t.reason || "").toString();
 
@@ -748,20 +801,6 @@
                         if (!t) return;
                         showTooltipAt(e.clientX, e.clientY, buildTradeLevelsHTML(t), "levels");
                     });
-
-                    row.addEventListener("mousemove", (e) => {
-                        if (tooltip.style.display !== "block") return;
-                        const x = e.clientX, y = e.clientY;
-                        const rect = tooltip.getBoundingClientRect();
-                        let left = x + 12;
-                        let top  = y + 12;
-                        const pad = 12;
-                        if (left + rect.width + pad > window.innerWidth) left = x - rect.width - 12;
-                        if (top + rect.height + pad > window.innerHeight) top = y - rect.height - 12;
-                        tooltip.style.left = `${Math.max(pad, left)}px`;
-                        tooltip.style.top  = `${Math.max(pad, top)}px`;
-                    });
-
                     row.addEventListener("mouseleave", hideTooltip);
 
                     const reasonCell = row.querySelector(".reason-cell");
@@ -778,11 +817,11 @@
             } else {
                 document.getElementById("global-history-body").innerHTML =
                     `<tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>`;
-                renderMonthReportsFromTrades([]);
             }
         }
     };
 
+    // ===== Buttons
     document.getElementById("apply").onclick = () => ws.send(JSON.stringify({
         instrument: document.getElementById("instrument").value,
         tf: document.getElementById("tf").value,
