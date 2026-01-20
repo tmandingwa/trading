@@ -17,12 +17,13 @@
             --muted-foreground: #71717a;
             --border: #e4e4e7;
             --radius: 0.5rem;
+
             --success-text: #166534;
             --success-bg: #dcfce7;
-            --warning-text: #854d0e;
-            --warning-bg: #fef9c3;
+
             --sl-color: #dc2626;
             --tp-color: #16a34a;
+
             --open-bg: #eef2ff;
             --open-text: #3730a3;
 
@@ -43,25 +44,32 @@
             background: var(--secondary); color: var(--foreground);
         }
 
-        body { display: flex; flex-direction: column; padding: 1rem; gap: 1rem; box-sizing: border-box; }
+        /* tighter overall spacing to fit 1 screen */
+        body {
+            display: flex;
+            flex-direction: column;
+            padding: 0.75rem;
+            gap: 0.75rem;
+            box-sizing: border-box;
+        }
 
         .topbar{
             display:flex;
             align-items:center;
             justify-content:space-between;
-            gap: 1rem;
+            gap: 0.75rem;
         }
 
-        h2 { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -0.025em; }
+        h2 { margin: 0; font-size: 1.15rem; font-weight: 650; letter-spacing: -0.025em; }
 
         .resume-link {
             text-decoration: none;
             background: var(--navy);
             color: white;
-            padding: 0.55rem 0.8rem;
+            padding: 0.5rem 0.75rem;
             border-radius: 10px;
-            font-weight: 700;
-            font-size: 0.85rem;
+            font-weight: 750;
+            font-size: 0.82rem;
             border: 1px solid rgba(255,255,255,0.14);
             display: inline-flex;
             align-items: center;
@@ -71,50 +79,74 @@
         .resume-link:hover { filter: brightness(1.06); }
 
         .dashboard-grid {
-            display: grid; flex-grow: 1; gap: 1rem; min-height: 0;
+            display: grid;
+            flex-grow: 1;
+            gap: 0.75rem;
+            min-height: 0;
             grid-template-columns: 300px 1fr 340px;
-            grid-template-rows: 1fr 1fr auto;
+            /* two tall rows + compact global row */
+            grid-template-rows: 1fr 1fr 235px;
         }
 
         .card {
-            background: var(--card); border: 1px solid var(--border);
-            border-radius: var(--radius); padding: 1.25rem; display: flex;
-            flex-direction: column; min-height: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1rem; /* tighter */
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
         }
 
         .card-header {
-            font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
-            color: var(--muted-foreground); margin-bottom: 0.75rem;
-            display: flex; justify-content: space-between; align-items: center;
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--muted-foreground);
+            margin-bottom: 0.6rem; /* tighter */
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             gap: 0.75rem;
         }
 
         .controls-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 1rem;
-            margin-bottom: 1.25rem;
+            gap: 0.75rem;
+            margin-bottom: 0.85rem;
             align-items: end;
         }
 
-        .field-group { display: flex; flex-direction: column; gap: 0.375rem; }
-        label { font-size: 0.8rem; font-weight: 500; color: var(--muted-foreground); }
+        .field-group { display: flex; flex-direction: column; gap: 0.325rem; }
+        label { font-size: 0.78rem; font-weight: 600; color: var(--muted-foreground); }
 
         select, input {
-            width: 100%; height: 2.25rem; padding: 0 0.75rem; font-size: 0.875rem;
-            border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px);
-            background: var(--background); outline: none;
+            width: 100%;
+            height: 2.15rem;
+            padding: 0 0.7rem;
+            font-size: 0.86rem;
+            border: 1px solid var(--border);
+            border-radius: calc(var(--radius) - 2px);
+            background: var(--background);
+            outline: none;
         }
 
         button {
-            flex: 1; height: 2.25rem; font-size: 0.875rem; font-weight: 500;
-            border-radius: calc(var(--radius) - 2px); cursor: pointer; border: 1px solid transparent;
+            flex: 1;
+            height: 2.15rem;
+            font-size: 0.86rem;
+            font-weight: 650;
+            border-radius: calc(var(--radius) - 2px);
+            cursor: pointer;
+            border: 1px solid transparent;
         }
         #apply { background: var(--primary); color: var(--primary-foreground); }
         #resetPaper { background: var(--secondary); color: var(--secondary-foreground); border: 1px solid var(--border); }
 
         .market-status {
-            margin-top: 0.6rem;
+            margin-top: 0.55rem;
             font-size: 0.72rem;
             color: var(--muted-foreground);
             display: flex;
@@ -125,7 +157,7 @@
             display: inline-flex;
             align-items: center;
             gap: 0.4rem;
-            font-weight: 700;
+            font-weight: 750;
         }
         .dot {
             width: 8px; height: 8px; border-radius: 9999px;
@@ -135,29 +167,44 @@
         .dot.open { background: #22c55e; }
         .dot.closed { background: #ef4444; }
 
-        .price-display { font-size: 1.75rem; font-weight: 700; margin: 0.5rem 0; font-family: monospace; }
-        .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem; }
-        .metric-box { background: var(--secondary); padding: 0.625rem; border-radius: var(--radius); }
-        .metric-label { color: var(--muted-foreground); font-size: 0.7rem; display: block; }
-        .metric-value { font-weight: 600; font-family: monospace; }
+        .price-display {
+            font-size: 1.6rem;
+            font-weight: 800;
+            margin: 0.35rem 0 0.55rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        }
+
+        .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; margin-bottom: 0.7rem; }
+        .metric-box { background: var(--secondary); padding: 0.55rem; border-radius: var(--radius); }
+        .metric-label { color: var(--muted-foreground); font-size: 0.68rem; display: block; font-weight: 800; }
+        .metric-value { font-weight: 750; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
 
         .status-badge {
-            padding: 0.125rem 0.625rem; border-radius: 9999px; font-weight: 700; font-size: 0.7rem;
-            background: var(--secondary); border: 1px solid var(--border);
+            padding: 0.125rem 0.6rem;
+            border-radius: 9999px;
+            font-weight: 850;
+            font-size: 0.68rem;
+            background: var(--secondary);
+            border: 1px solid var(--border);
         }
         .ready { background: var(--success-bg); color: var(--success-text); border: none; }
         .open { background: var(--open-bg); color: var(--open-text); border: none; }
 
         .scroll-area { flex-grow: 1; overflow-y: auto; min-height: 0; }
 
-        .history-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; table-layout: fixed; }
+        .history-table { width: 100%; border-collapse: collapse; font-size: 0.74rem; table-layout: fixed; }
         .history-table th {
-            text-align: left; padding: 0.75rem 0.5rem; color: var(--muted-foreground);
-            border-bottom: 1px solid var(--border); font-weight: 600;
-            position: sticky; top: 0; background: var(--card); z-index: 2;
+            text-align: left;
+            padding: 0.55rem 0.45rem; /* tighter */
+            color: var(--muted-foreground);
+            border-bottom: 1px solid var(--border);
+            font-weight: 800;
+            position: sticky; top: 0;
+            background: var(--card);
+            z-index: 2;
         }
         .history-table td {
-            padding: 0.75rem 0.5rem;
+            padding: 0.52rem 0.45rem; /* tighter (helps 3 rows fit) */
             border-bottom: 1px solid var(--secondary);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
@@ -170,15 +217,20 @@
         .col-pnl  { width: 12%; }
         .col-rsn  { width: 28%; }
 
-        .pos-card { background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 0.875rem; }
-        .pos-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
-        .pos-side { font-weight: 700; font-size: 0.8rem; }
-        .pos-row { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.375rem; }
+        .pos-card { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; }
+        .pos-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.55rem; }
+        .pos-side { font-weight: 850; font-size: 0.78rem; }
+        .pos-row { display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.3rem; }
 
         #chart { flex-grow: 1; width: 100%; height: 100%; }
 
-        .global-card { height: 290px; }
-        .global-card .scroll-area { max-height: 190px; }
+        /* ✅ Global card compact + only ~3 rows visible without scrolling */
+        .global-card { height: 235px; }
+        .global-card .scroll-area {
+            /* header row ~34px + 3 body rows ~ (3*30px) ≈ 124–140px */
+            height: 138px;
+            max-height: 138px;
+        }
 
         /* ✅ Tooltips */
         .trade-tooltip {
@@ -197,15 +249,8 @@
             pointer-events: none;
             white-space: nowrap;
         }
-        .trade-tooltip.reason {
-            white-space: normal;
-            max-width: 520px;
-        }
-        .trade-tooltip .tt-title {
-            font-weight: 800;
-            margin-bottom: 6px;
-            letter-spacing: 0.2px;
-        }
+        .trade-tooltip.reason { white-space: normal; max-width: 520px; }
+        .trade-tooltip .tt-title { font-weight: 900; margin-bottom: 6px; letter-spacing: 0.2px; }
         .trade-tooltip .tt-row {
             display: flex;
             justify-content: space-between;
@@ -213,18 +258,14 @@
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
         }
         .trade-tooltip .tt-key { color: rgba(255,255,255,0.75); }
-        .trade-tooltip .tt-val { font-weight: 800; }
+        .trade-tooltip .tt-val { font-weight: 900; }
         .trade-tooltip .tt-sl { color: #fca5a5; }
         .trade-tooltip .tt-tp { color: #86efac; }
 
         .reason-cell { cursor: help; }
 
         /* ✅ Reports button + popup calendar */
-        .header-left {
-            display:flex;
-            align-items:center;
-            gap:0.6rem;
-        }
+        .header-left { display:flex; align-items:center; gap:0.6rem; }
         .reports-btn{
             display:inline-flex;
             align-items:center;
@@ -232,9 +273,9 @@
             border: 1px solid var(--border);
             background: var(--secondary);
             color: var(--secondary-foreground);
-            padding: 0.25rem 0.55rem;
+            padding: 0.22rem 0.5rem;
             border-radius: 9999px;
-            font-size: 0.72rem;
+            font-size: 0.70rem;
             font-weight: 900;
             cursor: pointer;
             user-select:none;
@@ -279,11 +320,11 @@
         }
         .calendar-pop input[type="date"]{
             width: 100%;
-            height: 2.25rem;
+            height: 2.15rem;
             border-radius: 10px;
             border: 1px solid var(--border);
             padding: 0 0.65rem;
-            font-weight: 800;
+            font-weight: 850;
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
         }
         .cal-hint{
@@ -310,9 +351,7 @@
             background: var(--secondary);
             color: var(--muted-foreground);
         }
-        .pill .mini-dot{
-            width:8px;height:8px;border-radius:9999px;background:#9ca3af;
-        }
+        .pill .mini-dot{ width:8px;height:8px;border-radius:9999px;background:#9ca3af; }
         .pill.ready{ background: var(--rep-ready-bg); color: var(--rep-ready-tx); border: none; }
         .pill.ready .mini-dot{ background:#22c55e; }
         .pill.today{ background: var(--rep-today-bg); color: var(--rep-today-tx); border: none; }
@@ -371,22 +410,24 @@
             </div>
         </div>
 
-        <div class="card" style="grid-row: span 2; padding: 0;"><div id="chart"></div></div>
+        <div class="card" style="grid-row: span 2; padding: 0;">
+            <div id="chart"></div>
+        </div>
 
         <div class="card">
             <div class="card-header">Live Status <div id="status-badge-container"></div></div>
-            <div id="price-main" class="price-display">--.----</div>
+            <div id="price-main" class="price-display">--.-----</div>
             <div class="metric-row">
                 <div class="metric-box"><span class="metric-label">RSI</span><span class="metric-value" id="rsi-val">--.--</span></div>
-                <div class="metric-box"><span class="metric-label">ATR</span><span class="metric-value" id="atr-val">--.----</span></div>
+                <div class="metric-box"><span class="metric-label">ATR</span><span class="metric-value" id="atr-val">--.-----</span></div>
             </div>
-            <div id="reason" style="font-size:0.8rem; color:var(--muted-foreground); background:var(--secondary); padding:0.5rem; border-radius:4px;">Scanning...</div>
+            <div id="reason" style="font-size:0.8rem; color:var(--muted-foreground); background:var(--secondary); padding:0.5rem; border-radius:8px;">Scanning...</div>
         </div>
 
         <div class="card">
             <div class="card-header">Local Engine <span id="local-stats"></span></div>
             <div id="paperPositionContainer" class="scroll-area">
-                <div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:2rem 1rem;">No active trades.</div>
+                <div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:1.4rem 1rem;">No active trades.</div>
             </div>
         </div>
 
@@ -394,8 +435,6 @@
             <div class="card-header">
                 <div class="header-left">
                     <span>Global Performance (All Pairs)</span>
-
-                    <!-- ✅ Reports calendar button -->
                     <div class="reports-btn" id="reportsBtn" title="Download daily PDF report">
                         <span aria-hidden="true">📅</span>
                         <span>Reports</span>
@@ -404,7 +443,6 @@
                 <span id="global-metrics"></span>
             </div>
 
-            <!-- ✅ Calendar popup -->
             <div class="calendar-pop" id="calendarPop">
                 <div class="cal-title">
                     <span id="calLabel">Select day</span>
@@ -412,7 +450,6 @@
                 </div>
 
                 <input id="reportDate" type="date" />
-
                 <div class="cal-hint" id="calHint">
                     Pick any <b>past day</b> to download its PDF report. Today and future days are not downloadable.
                 </div>
@@ -424,6 +461,7 @@
                 </div>
             </div>
 
+            <!-- ✅ this box shows ~3 rows, rest via scroll -->
             <div class="scroll-area">
                 <table class="history-table">
                     <thead>
@@ -438,7 +476,7 @@
                         </tr>
                     </thead>
                     <tbody id="global-history-body">
-                        <tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>
+                        <tr><td colspan="7" style="text-align:center; padding:1.4rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -482,7 +520,17 @@
         },
         timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#e4e4e7' },
     });
-    const candleSeries = chart.addCandlestickSeries({ upColor: '#16a34a', downColor: '#dc2626' });
+
+    // ✅ 5-decimal Y-axis labels
+    const candleSeries = chart.addCandlestickSeries({
+        upColor: '#16a34a',
+        downColor: '#dc2626',
+        priceFormat: {
+            type: 'price',
+            precision: 5,
+            minMove: 0.00001
+        }
+    });
 
     // ===== Helpers
     function toDateAny(ts) {
@@ -520,6 +568,12 @@
         return `$${v.toFixed(2)}`;
     }
 
+    function fmtPx5(x) {
+        const v = Number(x);
+        if (x === null || x === undefined || Number.isNaN(v)) return "--";
+        return v.toFixed(5);
+    }
+
     // ===== Market sessions
     function getPartsInTZ(tz) {
         const dtf = new Intl.DateTimeFormat("en-US", {
@@ -550,15 +604,15 @@
         el.innerHTML = `
             <div class="market-pill">
                 <span class="dot ${londonOpen ? 'open' : 'closed'}"></span>
-                London: <span style="font-weight:800; color:${londonOpen ? '#166534' : '#b91c1c'}">${londonOpen ? 'OPEN' : 'CLOSED'}</span>
+                London: <span style="font-weight:900; color:${londonOpen ? '#166534' : '#b91c1c'}">${londonOpen ? 'OPEN' : 'CLOSED'}</span>
             </div>
             <div class="market-pill">
                 <span class="dot ${nyOpen ? 'open' : 'closed'}"></span>
-                New York: <span style="font-weight:800; color:${nyOpen ? '#166534' : '#b91c1c'}">${nyOpen ? 'OPEN' : 'CLOSED'}</span>
+                New York: <span style="font-weight:900; color:${nyOpen ? '#166534' : '#b91c1c'}">${nyOpen ? 'OPEN' : 'CLOSED'}</span>
             </div>
             <div class="market-pill">
                 <span class="dot ${tokyoOpen ? 'open' : 'closed'}"></span>
-                Tokyo: <span style="font-weight:800; color:${tokyoOpen ? '#166534' : '#b91c1c'}">${tokyoOpen ? 'OPEN' : 'CLOSED'}</span>
+                Tokyo: <span style="font-weight:900; color:${tokyoOpen ? '#166534' : '#b91c1c'}">${tokyoOpen ? 'OPEN' : 'CLOSED'}</span>
             </div>
         `;
     }
@@ -579,22 +633,15 @@
         return `${parts.year}-${parts.month}-${parts.day}`;
     }
 
-    function ymdToDateLocal(ymd) {
-        // Treat as UTC date then display restrictions based on string compare
-        const [y,m,d] = ymd.split("-").map(Number);
-        return new Date(Date.UTC(y, m-1, d));
-    }
-
     function setDateBounds() {
-        // allow selecting any past day (no min), but set max to yesterday
         const t = todayYMD();
         const [y, m, d] = t.split("-").map(Number);
         const todayUTC = new Date(Date.UTC(y, m-1, d));
         const ydayUTC = new Date(todayUTC.getTime() - 24*60*60*1000);
         const yday = ydayUTC.toISOString().slice(0,10);
 
-        reportDate.max = yday;      // cannot choose today/future
-        reportDate.value = yday;    // default to yesterday
+        reportDate.max = yday;
+        reportDate.value = yday;
         calLabel.innerText = `Reports (${t} today)`;
     }
 
@@ -604,7 +651,6 @@
         const parentRect = calendarPop.parentElement.getBoundingClientRect();
 
         calendarPop.style.display = "block";
-        // place below button
         calendarPop.style.left = `${btnRect.left - parentRect.left}px`;
         calendarPop.style.top  = `${btnRect.bottom - parentRect.top + 8}px`;
     }
@@ -633,7 +679,7 @@
     }
 
     reportDate.addEventListener("change", () => {
-        const ymd = reportDate.value; // YYYY-MM-DD
+        const ymd = reportDate.value;
         if (!ymd) return;
         downloadReport(ymd);
         closeCalendar();
@@ -680,17 +726,11 @@
         const sl    = (t.sl ?? t.stop_loss ?? null);
         const tp    = (t.tp ?? t.take_profit ?? null);
 
-        const fmtPx = (x) => {
-            const v = Number(x);
-            if (x === null || x === undefined || Number.isNaN(v)) return "--";
-            return v.toFixed(4);
-        };
-
         return `
             <div class="tt-title">${title}</div>
-            <div class="tt-row"><span class="tt-key">Entry</span><span class="tt-val">${fmtPx(entry)}</span></div>
-            <div class="tt-row"><span class="tt-key">SL</span><span class="tt-val tt-sl">${fmtPx(sl)}</span></div>
-            <div class="tt-row"><span class="tt-key">TP</span><span class="tt-val tt-tp">${fmtPx(tp)}</span></div>
+            <div class="tt-row"><span class="tt-key">Entry</span><span class="tt-val">${fmtPx5(entry)}</span></div>
+            <div class="tt-row"><span class="tt-key">SL</span><span class="tt-val tt-sl">${fmtPx5(sl)}</span></div>
+            <div class="tt-row"><span class="tt-key">TP</span><span class="tt-val tt-tp">${fmtPx5(tp)}</span></div>
         `;
     }
 
@@ -715,9 +755,9 @@
         const paper = data.paper;
 
         if (st && st.ok) {
-            document.getElementById("price-main").innerText = Number(st.close).toFixed(4);
+            document.getElementById("price-main").innerText = fmtPx5(st.close);
             document.getElementById("rsi-val").innerText = Number(st.rsi).toFixed(2);
-            document.getElementById("atr-val").innerText = Number(st.atr).toFixed(4);
+            document.getElementById("atr-val").innerText = fmtPx5(st.atr);
             document.getElementById("reason").innerText = st.reason || "Scanning...";
             document.getElementById("status-badge-container").innerHTML =
                 st.side !== "NO_TRADE" ? `<span class="status-badge ready">${st.side}</span>` : "";
@@ -738,12 +778,12 @@
                         <span class="pos-side" style="color:${pos.side === 'BUY' ? 'var(--tp-color)' : 'var(--sl-color)'}">${pos.side} OPEN</span>
                         <span style="font-size:0.7rem; color:var(--muted-foreground);">${formatTimeLocal(pos.entry_time)}</span>
                     </div>
-                    <div class="pos-row"><span>Entry</span><span class="metric-value">${Number(pos.entry).toFixed(4)}</span></div>
-                    <div class="pos-row"><span>SL</span><span class="metric-value" style="color:var(--sl-color)">${Number(pos.sl).toFixed(4)}</span></div>
-                    <div class="pos-row"><span>TP</span><span class="metric-value" style="color:var(--tp-color)">${Number(pos.tp).toFixed(4)}</span></div>
+                    <div class="pos-row"><span>Entry</span><span class="metric-value">${fmtPx5(pos.entry)}</span></div>
+                    <div class="pos-row"><span>SL</span><span class="metric-value" style="color:var(--sl-color)">${fmtPx5(pos.sl)}</span></div>
+                    <div class="pos-row"><span>TP</span><span class="metric-value" style="color:var(--tp-color)">${fmtPx5(pos.tp)}</span></div>
                 </div>`;
         } else {
-            posContainer.innerHTML = `<div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:2rem 1rem;">No active trades.</div>`;
+            posContainer.innerHTML = `<div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:1.4rem 1rem;">No active trades.</div>`;
         }
 
         if (gs) {
@@ -769,12 +809,12 @@
                     return `
                         <tr class="trade-row" data-trade="${tradeJson}">
                             <td class="col-time">${formatTimeLocal(timeShow)}</td>
-                            <td class="col-pair" style="font-weight:700;">${t.instrument} ${t.tf}</td>
+                            <td class="col-pair" style="font-weight:800;">${t.instrument} ${t.tf}</td>
                             <td class="col-side">${t.side}</td>
                             <td class="col-status">
                                 <span class="status-badge ${isOpen ? 'open' : ''}">${status}</span>
                             </td>
-                            <td class="col-out" style="color:${outcome === 'TP' ? 'var(--tp-color)' : (outcome === 'SL' ? 'var(--sl-color)' : 'var(--muted-foreground)')}; font-weight:800;">
+                            <td class="col-out" style="color:${outcome === 'TP' ? 'var(--tp-color)' : (outcome === 'SL' ? 'var(--sl-color)' : 'var(--muted-foreground)')}; font-weight:900;">
                                 ${outcome}
                             </td>
                             <td class="col-pnl" style="color:${(pnlVal ?? 0) >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">
@@ -816,7 +856,7 @@
 
             } else {
                 document.getElementById("global-history-body").innerHTML =
-                    `<tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>`;
+                    `<tr><td colspan="7" style="text-align:center; padding:1.4rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>`;
             }
         }
     };
@@ -830,5 +870,6 @@
     }));
     document.getElementById("resetPaper").onclick = () => ws.send(JSON.stringify({ reset_paper: true }));
 </script>
+
 </body>
 </html>
