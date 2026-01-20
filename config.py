@@ -2,31 +2,44 @@
 import os
 from dataclasses import dataclass
 
-# -------------------------
-# OANDA
-# -------------------------
+# ============================================================
+# OANDA (Required by oanda_stream.py)
+# ============================================================
 OANDA_TOKEN = os.getenv("OANDA_TOKEN", "")
 OANDA_ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID", "")
-OANDA_ENV = os.getenv("OANDA_ENV", "practice")  # practice | live
+
+# Accept both: "practice"/"live" (your current style) and "PRACTICE"/"LIVE"
+OANDA_ENV = os.getenv("OANDA_ENV", "practice").strip().lower()  # practice | live
+
+# Base URLs (REST + STREAM)
+if OANDA_ENV == "live":
+    OANDA_API_URL = "https://api-fxtrade.oanda.com"
+    STREAM_URL = "https://stream-fxtrade.oanda.com"
+else:
+    OANDA_API_URL = "https://api-fxpractice.oanda.com"
+    STREAM_URL = "https://stream-fxpractice.oanda.com"
+
+# Optional: fail fast in production (Railway) if creds are missing
+# You can disable this by setting REQUIRE_OANDA_CREDS=0
+REQUIRE_OANDA_CREDS = os.getenv("REQUIRE_OANDA_CREDS", "1") == "1"
+if REQUIRE_OANDA_CREDS:
+    if not OANDA_TOKEN:
+        raise RuntimeError("Missing env var OANDA_TOKEN")
+    if not OANDA_ACCOUNT_ID:
+        raise RuntimeError("Missing env var OANDA_ACCOUNT_ID")
 
 # ============================================================
 # DASHBOARD + ENGINE SCOPE
 # ============================================================
-# You requested the app to focus ONLY on:
-#   - Instrument: EUR_USD
-#   - Timeframes: M15, M30
-#
-# If you later want more pairs/TFs, extend these lists.
 SUPPORTED_INSTRUMENTS = ["EUR_USD"]
 SUPPORTED_TFS = ["M15", "M30"]
 
-# Dashboard defaults
 DEFAULT_INSTRUMENT = "EUR_USD"
 DEFAULT_TF = "M15"  # M15, M30
 
-# -------------------------
-# Trading rule parameters
-# -------------------------
+# ============================================================
+# Trading rule parameters (your existing rule config preserved)
+# ============================================================
 EMA_FAST = 20
 EMA_SLOW = 50
 
@@ -47,17 +60,17 @@ MIN_CONDITIONS_TO_TRADE = 2
 # How many candles to seed for each TF on startup
 SEED_CANDLES = 600
 
-# -------------------------
+# ============================================================
 # Server / WS
-# -------------------------
+# ============================================================
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("PORT", os.getenv("SERVER_PORT", "8000")))
 WS_ENABLED = os.getenv("WS_ENABLED", "1") == "1"
 WS_PING_SEC = int(os.getenv("WS_PING_SEC", "25"))
 
-# -------------------------
+# ============================================================
 # Structured config object
-# -------------------------
+# ============================================================
 @dataclass
 class TAConfig:
     ema_fast: int = EMA_FAST
@@ -74,8 +87,16 @@ class TAConfig:
     sr_tol_atr: float = SR_TOL_ATR
     min_conditions_to_trade: int = MIN_CONDITIONS_TO_TRADE
 
-
 CFG = {
+    "OANDA_ENV": OANDA_ENV,
+    "OANDA_API_URL": OANDA_API_URL,
+    "STREAM_URL": STREAM_URL,
+
+    "SUPPORTED_INSTRUMENTS": SUPPORTED_INSTRUMENTS,
+    "SUPPORTED_TFS": SUPPORTED_TFS,
+    "DEFAULT_INSTRUMENT": DEFAULT_INSTRUMENT,
+    "DEFAULT_TF": DEFAULT_TF,
+
     "EMA_FAST": EMA_FAST,
     "EMA_SLOW": EMA_SLOW,
     "RSI_LEN": RSI_LEN,
@@ -89,4 +110,11 @@ CFG = {
     "SWING_LOOKBACK": SWING_LOOKBACK,
     "SR_TOL_ATR": SR_TOL_ATR,
     "MIN_CONDITIONS_TO_TRADE": MIN_CONDITIONS_TO_TRADE,
+
+    "SEED_CANDLES": SEED_CANDLES,
+
+    "SERVER_HOST": SERVER_HOST,
+    "SERVER_PORT": SERVER_PORT,
+    "WS_ENABLED": WS_ENABLED,
+    "WS_PING_SEC": WS_PING_SEC,
 }
