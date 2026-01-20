@@ -25,6 +25,8 @@
             --tp-color: #16a34a;
             --open-bg: #eef2ff;
             --open-text: #3730a3;
+
+            --navy: #0b1f3b;
         }
 
         html, body {
@@ -34,7 +36,31 @@
         }
 
         body { display: flex; flex-direction: column; padding: 1rem; gap: 1rem; box-sizing: border-box; }
+
+        .topbar{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap: 1rem;
+        }
+
         h2 { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: -0.025em; }
+
+        .resume-link {
+            text-decoration: none;
+            background: var(--navy);
+            color: white;
+            padding: 0.55rem 0.8rem;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            border: 1px solid rgba(255,255,255,0.14);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            white-space: nowrap;
+        }
+        .resume-link:hover { filter: brightness(1.06); }
 
         .dashboard-grid {
             display: grid; flex-grow: 1; gap: 1rem; min-height: 0;
@@ -78,6 +104,28 @@
         #apply { background: var(--primary); color: var(--primary-foreground); }
         #resetPaper { background: var(--secondary); color: var(--secondary-foreground); border: 1px solid var(--border); }
 
+        .market-status {
+            margin-top: 0.6rem;
+            font-size: 0.72rem;
+            color: var(--muted-foreground);
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+        }
+        .market-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-weight: 700;
+        }
+        .dot {
+            width: 8px; height: 8px; border-radius: 9999px;
+            background: #9ca3af;
+            display: inline-block;
+        }
+        .dot.open { background: #22c55e; }
+        .dot.closed { background: #ef4444; }
+
         .price-display { font-size: 1.75rem; font-weight: 700; margin: 0.5rem 0; font-family: monospace; }
         .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem; }
         .metric-box { background: var(--secondary); padding: 0.625rem; border-radius: var(--radius); }
@@ -91,7 +139,7 @@
         .ready { background: var(--success-bg); color: var(--success-text); border: none; }
         .open { background: var(--open-bg); color: var(--open-text); border: none; }
 
-        .scroll-area { flex-grow: 1; overflow-y: auto; min-height: 0okit; }
+        .scroll-area { flex-grow: 1; overflow-y: auto; min-height: 0; }
 
         .history-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; table-layout: fixed; }
         .history-table th {
@@ -125,7 +173,7 @@
         .global-card { height: 240px; }
         .global-card .scroll-area { max-height: 170px; }
 
-        /* ✅ Hover tooltip */
+        /* ✅ Tooltips */
         .trade-tooltip {
             position: fixed;
             z-index: 9999;
@@ -138,9 +186,13 @@
             font-size: 12px;
             line-height: 1.35;
             box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-            max-width: 260px;
+            max-width: 320px;
             pointer-events: none;
             white-space: nowrap;
+        }
+        .trade-tooltip.reason {
+            white-space: normal;
+            max-width: 520px;
         }
         .trade-tooltip .tt-title {
             font-weight: 800;
@@ -157,11 +209,19 @@
         .trade-tooltip .tt-val { font-weight: 800; }
         .trade-tooltip .tt-sl { color: #fca5a5; }
         .trade-tooltip .tt-tp { color: #86efac; }
+
+        /* Make reason cell look hoverable */
+        .reason-cell { cursor: help; }
     </style>
 </head>
 <body>
 
-    <h2>FX TA Dashboard</h2>
+    <div class="topbar">
+        <h2 id="appTitle">FX TA Dashboard</h2>
+        <a class="resume-link" id="resumeLink" href="#" download>
+            Download Timothy Mandingwa Resume
+        </a>
+    </div>
 
     <div class="dashboard-grid">
         <div class="card" style="grid-row: span 2;">
@@ -192,7 +252,17 @@
                     <input id="risk_pct" type="number" value="1.0" style="width:100px">
                 </div>
             </div>
-            <div style="display:flex; gap:0.5rem;"><button id="apply">Apply</button><button id="resetPaper">Reset</button></div>
+
+            <div style="display:flex; gap:0.5rem;">
+                <button id="apply">Apply</button>
+                <button id="resetPaper">Reset</button>
+            </div>
+
+            <!-- ✅ Market session status under Apply/Reset -->
+            <div class="market-status" id="marketStatus">
+                <div class="market-pill"><span class="dot"></span> London: --</div>
+                <div class="market-pill"><span class="dot"></span> New York: --</div>
+            </div>
         </div>
 
         <div class="card" style="grid-row: span 2; padding: 0;"><div id="chart"></div></div>
@@ -214,7 +284,6 @@
             </div>
         </div>
 
-        <!-- ✅ Global Performance now scrollable and includes Status -->
         <div class="card global-card" style="grid-column: 1 / -1;">
             <div class="card-header">Global Performance (All Pairs) <span id="global-metrics"></span></div>
             <div class="scroll-area">
@@ -242,12 +311,31 @@
     <div id="tradeTooltip" class="trade-tooltip"></div>
 
 <script>
+    // =========================
+    // ✅ CONFIG YOU MAY CHANGE
+    // =========================
+    const RESUME_URL = "/static/Timothy_Mandingwa_Resume.pdf"; // <-- change if your path differs
+
+    // =========================
+    // ✅ Timezone: viewer's browser
+    // =========================
+    const userLocale = navigator.language || "en-US";
+    const userTZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "Local";
+    document.getElementById("appTitle").innerText = `FX TA Dashboard — ${userTZ}`;
+
+    const resumeLink = document.getElementById("resumeLink");
+    resumeLink.href = RESUME_URL;
+
+    // =========================
+    // ✅ WebSocket
+    // =========================
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
+    // =========================
+    // ✅ Chart
+    // =========================
     const chartEl = document.getElementById('chart');
-    const userLocale = navigator.language || 'en-US';
-
     const chart = LightweightCharts.createChart(chartEl, {
         layout: { background: { color: 'transparent' }, textColor: '#71717a' },
         grid: { vertLines: { color: '#e4e4e7' }, horzLines: { color: '#e4e4e7' } },
@@ -261,19 +349,51 @@
                     day: 'numeric',
                     hour: '2-digit',
                     minute: '2-digit',
-                    hour12: false
+                    hour12: false,
+                    timeZone: userTZ
                 }).format(date);
             }
         },
         timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#e4e4e7' },
     });
-
     const candleSeries = chart.addCandlestickSeries({ upColor: '#16a34a', downColor: '#dc2626' });
 
-    function formatTime(ts) {
-        if (!ts) return "--:--:--";
-        const d = new Date(ts);
-        return d.toLocaleTimeString(userLocale, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    // =========================
+    // ✅ Helpers: parsing time robustly
+    // =========================
+    function toDateAny(ts) {
+        if (ts === null || ts === undefined || ts === "") return null;
+
+        // number: seconds or ms
+        if (typeof ts === "number") {
+            // if looks like seconds (10 digits), convert to ms
+            if (ts < 2e12) return new Date(ts * 1000);
+            return new Date(ts);
+        }
+
+        // string: ISO or "YYYY-MM-DD ..." etc.
+        if (typeof ts === "string") {
+            const d = new Date(ts);
+            if (!Number.isNaN(d.getTime())) return d;
+
+            // if it's numeric string
+            const n = Number(ts);
+            if (!Number.isNaN(n)) {
+                if (n < 2e12) return new Date(n * 1000);
+                return new Date(n);
+            }
+        }
+        return null;
+    }
+
+    function formatTimeLocal(ts) {
+        const d = toDateAny(ts);
+        if (!d) return "--:--:--";
+        return d.toLocaleTimeString(userLocale, {
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: false,
+            timeZone: userTZ
+        });
     }
 
     function fmtMoney(x) {
@@ -290,47 +410,74 @@
         return v.toFixed(4);
     }
 
-    // ✅ Tooltip helpers
-    const tooltip = document.getElementById("tradeTooltip");
-
-    function buildTooltipHTML(t) {
-        const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
-        const title = `${t.instrument || ""} ${t.tf || ""} · ${t.side || ""} · ${status}`.trim();
-
-        // support multiple key names (safe)
-        const entry = (t.entry ?? t.entry_price ?? t.entry_px ?? null);
-        const sl    = (t.sl ?? t.stop_loss ?? null);
-        const tp    = (t.tp ?? t.take_profit ?? null);
-        const exit  = (t.exit ?? t.exit_price ?? t.exit_px ?? null);
-        const pnl   = (t.pnl_usd ?? t.pnl ?? null);
-
-        const rows = [
-            ["Entry", fmtPx(entry), ""],
-            ["SL",    fmtPx(sl), "tt-sl"],
-            ["TP",    fmtPx(tp), "tt-tp"],
-        ];
-
-        if (status !== "OPEN") {
-            rows.push(["Exit", fmtPx(exit), ""]);
-            rows.push(["PnL",  (pnl === null || pnl === undefined) ? "--" : fmtMoney(pnl), ""]);
-        }
-
-        return `
-            <div class="tt-title">${title}</div>
-            ${rows.map(([k,v,cls]) => `
-                <div class="tt-row">
-                    <span class="tt-key">${k}</span>
-                    <span class="tt-val ${cls}">${v}</span>
-                </div>
-            `).join("")}
-        `;
+    // =========================
+    // ✅ Market open status (London & NY)
+    // =========================
+    function getPartsInTZ(tz) {
+        const dtf = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz,
+            weekday: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false
+        });
+        const parts = dtf.formatToParts(new Date());
+        const map = {};
+        parts.forEach(p => { map[p.type] = p.value; });
+        return map;
     }
 
-    function showTooltipAt(x, y, html) {
+    function isWeekdayShort(wd) {
+        return ["Mon","Tue","Wed","Thu","Fri"].includes(wd);
+    }
+
+    // Simple session windows (you asked “London open” & “New York open”)
+    // London: 08:00–17:00 (Europe/London)
+    // NY:     08:00–17:00 (America/New_York)
+    function isSessionOpen(tz, startHH, startMM, endHH, endMM) {
+        const p = getPartsInTZ(tz);
+        const wd = p.weekday;
+        if (!isWeekdayShort(wd)) return false;
+
+        const hh = Number(p.hour);
+        const mm = Number(p.minute);
+        const mins = hh * 60 + mm;
+        const start = startHH * 60 + startMM;
+        const end = endHH * 60 + endMM;
+        return (mins >= start && mins <= end);
+    }
+
+    function renderMarketStatus() {
+        const londonOpen = isSessionOpen("Europe/London", 8, 0, 17, 0);
+        const nyOpen = isSessionOpen("America/New_York", 8, 0, 17, 0);
+
+        const el = document.getElementById("marketStatus");
+        el.innerHTML = `
+            <div class="market-pill">
+                <span class="dot ${londonOpen ? 'open' : 'closed'}"></span>
+                London: <span style="font-weight:800; color:${londonOpen ? '#166534' : '#b91c1c'}">${londonOpen ? 'OPEN' : 'CLOSED'}</span>
+            </div>
+            <div class="market-pill">
+                <span class="dot ${nyOpen ? 'open' : 'closed'}"></span>
+                New York: <span style="font-weight:800; color:${nyOpen ? '#166534' : '#b91c1c'}">${nyOpen ? 'OPEN' : 'CLOSED'}</span>
+            </div>
+        `;
+    }
+    renderMarketStatus();
+    setInterval(renderMarketStatus, 30_000); // refresh every 30s
+
+    // =========================
+    // ✅ Tooltips: two modes
+    // 1) Row hover: Entry/SL/TP
+    // 2) Reason hover: full reason
+    // =========================
+    const tooltip = document.getElementById("tradeTooltip");
+
+    function showTooltipAt(x, y, html, mode) {
+        tooltip.classList.toggle("reason", mode === "reason");
         tooltip.innerHTML = html;
         tooltip.style.display = "block";
 
-        // position with screen bounds clamp
         const pad = 12;
         const rect = tooltip.getBoundingClientRect();
         let left = x + 12;
@@ -345,14 +492,57 @@
 
     function hideTooltip() {
         tooltip.style.display = "none";
+        tooltip.classList.remove("reason");
     }
 
-    // Hide on scroll (keeps it clean)
+    function buildTradeLevelsHTML(t) {
+        const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
+        const title = `${t.instrument || ""} ${t.tf || ""} · ${t.side || ""} · ${status}`.trim();
+
+        const entry = (t.entry ?? t.entry_price ?? t.entry_px ?? null);
+        const sl    = (t.sl ?? t.stop_loss ?? null);
+        const tp    = (t.tp ?? t.take_profit ?? null);
+
+        return `
+            <div class="tt-title">${title}</div>
+            <div class="tt-row"><span class="tt-key">Entry</span><span class="tt-val">${fmtPx(entry)}</span></div>
+            <div class="tt-row"><span class="tt-key">SL</span><span class="tt-val tt-sl">${fmtPx(sl)}</span></div>
+            <div class="tt-row"><span class="tt-key">TP</span><span class="tt-val tt-tp">${fmtPx(tp)}</span></div>
+        `;
+    }
+
+    function buildReasonHTML(t) {
+        const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
+        const title = `${t.instrument || ""} ${t.tf || ""} · ${t.side || ""} · ${status}`.trim();
+        const reason = (t.reason || "").toString();
+
+        return `
+            <div class="tt-title">Reason · ${title}</div>
+            <div style="white-space:normal; font-size:12px; line-height:1.45; color:rgba(255,255,255,0.92);">
+                ${escapeHTML(reason || "—")}
+            </div>
+        `;
+    }
+
+    function escapeHTML(str) {
+        return str.replace(/[&<>"']/g, (m) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#39;",
+        }[m]));
+    }
+
+    // Hide tooltip on scroll/resizes
     document.querySelectorAll(".scroll-area").forEach(el => {
         el.addEventListener("scroll", hideTooltip, { passive: true });
     });
     window.addEventListener("resize", hideTooltip);
 
+    // =========================
+    // ✅ Live Updates
+    // =========================
     ws.onmessage = (ev) => {
         const data = JSON.parse(ev.data);
         const st = data.state;
@@ -360,16 +550,19 @@
         const paper = data.paper;
 
         if (st && st.ok) {
-            document.getElementById("price-main").innerText = st.close.toFixed(4);
-            document.getElementById("rsi-val").innerText = st.rsi.toFixed(2);
-            document.getElementById("atr-val").innerText = st.atr.toFixed(4);
+            // ✅ 4 decimal places
+            document.getElementById("price-main").innerText = Number(st.close).toFixed(4);
+            document.getElementById("rsi-val").innerText = Number(st.rsi).toFixed(2);
+            document.getElementById("atr-val").innerText = Number(st.atr).toFixed(4);
             document.getElementById("reason").innerText = st.reason || "Scanning...";
             document.getElementById("status-badge-container").innerHTML =
                 st.side !== "NO_TRADE" ? `<span class="status-badge ready">${st.side}</span>` : "";
         }
 
         if (data.candles) {
-            candleSeries.setData(data.candles.map(c => ({ time: c.t/1000, open: c.o, high: c.h, low: c.l, close: c.c })));
+            candleSeries.setData(data.candles.map(c => ({
+                time: c.t/1000, open: c.o, high: c.h, low: c.l, close: c.c
+            })));
         }
 
         const posContainer = document.getElementById("paperPositionContainer");
@@ -379,11 +572,11 @@
                 <div class="pos-card">
                     <div class="pos-header">
                         <span class="pos-side" style="color:${pos.side === 'BUY' ? 'var(--tp-color)' : 'var(--sl-color)'}">${pos.side} OPEN</span>
-                        <span style="font-size:0.7rem; color:var(--muted-foreground);">${formatTime(pos.entry_time)}</span>
+                        <span style="font-size:0.7rem; color:var(--muted-foreground);">${formatTimeLocal(pos.entry_time)}</span>
                     </div>
-                    <div class="pos-row"><span>Entry</span><span class="metric-value">${pos.entry.toFixed(4)}</span></div>
-                    <div class="pos-row"><span>SL</span><span class="metric-value" style="color:var(--sl-color)">${pos.sl.toFixed(4)}</span></div>
-                    <div class="pos-row"><span>TP</span><span class="metric-value" style="color:var(--tp-color)">${pos.tp.toFixed(4)}</span></div>
+                    <div class="pos-row"><span>Entry</span><span class="metric-value">${Number(pos.entry).toFixed(4)}</span></div>
+                    <div class="pos-row"><span>SL</span><span class="metric-value" style="color:var(--sl-color)">${Number(pos.sl).toFixed(4)}</span></div>
+                    <div class="pos-row"><span>TP</span><span class="metric-value" style="color:var(--tp-color)">${Number(pos.tp).toFixed(4)}</span></div>
                 </div>`;
         } else {
             posContainer.innerHTML = `<div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:2rem 1rem;">No active trades.</div>`;
@@ -399,20 +592,20 @@
 
             const rows = gs.timeline && gs.timeline.length ? gs.timeline : (gs.history || []);
             if (rows && rows.length > 0) {
-                document.getElementById("global-history-body").innerHTML = rows.map((t, idx) => {
+                document.getElementById("global-history-body").innerHTML = rows.map((t) => {
                     const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
                     const isOpen = status === "OPEN";
                     const timeShow = isOpen ? t.entry_time : t.exit_time;
                     const outcome = isOpen ? "—" : (t.outcome || t.result || "—");
                     const pnlVal = isOpen ? null : t.pnl_usd;
 
-                    // ✅ store full trade payload in data-trade for hover
+                    // store trade payload for hover
                     const tradeJson = encodeURIComponent(JSON.stringify(t));
+                    const reasonText = (t.reason || "").toString();
 
                     return `
-                        <tr class="trade-row"
-                            data-trade="${tradeJson}">
-                            <td class="col-time">${formatTime(timeShow)}</td>
+                        <tr class="trade-row" data-trade="${tradeJson}">
+                            <td class="col-time">${formatTimeLocal(timeShow)}</td>
                             <td class="col-pair" style="font-weight:700;">${t.instrument} ${t.tf}</td>
                             <td class="col-side">${t.side}</td>
                             <td class="col-status">
@@ -424,21 +617,34 @@
                             <td class="col-pnl" style="color:${(pnlVal ?? 0) >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">
                                 ${isOpen ? "--" : fmtMoney(pnlVal)}
                             </td>
-                            <td class="col-rsn" style="font-style:italic;">${t.reason || ""}</td>
+
+                            <!-- ✅ Reason cell hover shows full reason -->
+                            <td class="col-rsn reason-cell"
+                                data-reason="${encodeURIComponent(reasonText)}"
+                                style="font-style:italic;">
+                                ${escapeHTML(reasonText)}
+                            </td>
                         </tr>`;
                 }).join('');
 
-                // ✅ attach hover handlers after render
+                // Attach hover handlers
                 document.querySelectorAll(".trade-row").forEach(row => {
-                    row.addEventListener("mouseenter", (e) => {
+                    const getTrade = () => {
                         try {
                             const raw = decodeURIComponent(row.getAttribute("data-trade") || "");
-                            const t = JSON.parse(raw);
-                            showTooltipAt(e.clientX, e.clientY, buildTooltipHTML(t));
+                            return JSON.parse(raw);
                         } catch {
-                            // ignore
+                            return null;
                         }
+                    };
+
+                    // Hover anywhere on row = show Entry/SL/TP tooltip
+                    row.addEventListener("mouseenter", (e) => {
+                        const t = getTrade();
+                        if (!t) return;
+                        showTooltipAt(e.clientX, e.clientY, buildTradeLevelsHTML(t), "levels");
                     });
+
                     row.addEventListener("mousemove", (e) => {
                         if (tooltip.style.display !== "block") return;
                         const x = e.clientX, y = e.clientY;
@@ -451,7 +657,40 @@
                         tooltip.style.left = `${Math.max(pad, left)}px`;
                         tooltip.style.top  = `${Math.max(pad, top)}px`;
                     });
+
                     row.addEventListener("mouseleave", hideTooltip);
+
+                    // Hover specifically on reason cell = show full reason tooltip (override)
+                    const reasonCell = row.querySelector(".reason-cell");
+                    if (reasonCell) {
+                        reasonCell.addEventListener("mouseenter", (e) => {
+                            const t = getTrade();
+                            if (!t) return;
+                            showTooltipAt(e.clientX, e.clientY, buildReasonHTML(t), "reason");
+                        });
+
+                        reasonCell.addEventListener("mousemove", (e) => {
+                            if (tooltip.style.display !== "block") return;
+                            const x = e.clientX, y = e.clientY;
+                            const rect = tooltip.getBoundingClientRect();
+                            let left = x + 12;
+                            let top  = y + 12;
+                            const pad = 12;
+                            if (left + rect.width + pad > window.innerWidth) left = x - rect.width - 12;
+                            if (top + rect.height + pad > window.innerHeight) top = y - rect.height - 12;
+                            tooltip.style.left = `${Math.max(pad, left)}px`;
+                            tooltip.style.top  = `${Math.max(pad, top)}px`;
+                        });
+
+                        // when leaving reason, go back to levels tooltip for row if still inside row
+                        reasonCell.addEventListener("mouseleave", (e) => {
+                            const t = getTrade();
+                            if (!t) { hideTooltip(); return; }
+                            // If still over the row, show levels again
+                            // We can safely show levels at current mouse position (last known)
+                            hideTooltip();
+                        });
+                    }
                 });
 
             } else {
