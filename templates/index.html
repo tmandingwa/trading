@@ -27,6 +27,14 @@
             --open-text: #3730a3;
 
             --navy: #0b1f3b;
+
+            /* Reports colors */
+            --rep-ready-bg: #dcfce7;
+            --rep-ready-tx: #166534;
+            --rep-miss-bg: #f4f4f5;
+            --rep-miss-tx: #71717a;
+            --rep-today-bg: #eef2ff;
+            --rep-today-tx: #3730a3;
         }
 
         html, body {
@@ -76,8 +84,9 @@
 
         .card-header {
             font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
-            color: var(--muted-foreground); margin-bottom: 1rem;
+            color: var(--muted-foreground); margin-bottom: 0.75rem;
             display: flex; justify-content: space-between; align-items: center;
+            gap: 0.75rem;
         }
 
         .controls-grid {
@@ -153,7 +162,6 @@
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
 
-        /* Updated widths to include Status */
         .col-time { width: 14%; }
         .col-pair { width: 18%; }
         .col-side { width: 9%; }
@@ -169,11 +177,51 @@
 
         #chart { flex-grow: 1; width: 100%; height: 100%; }
 
-        /* ✅ Make Global Performance a fixed scrollable box so page fits one screen */
-        .global-card { height: 240px; }
-        .global-card .scroll-area { max-height: 170px; }
+        .global-card { height: 290px; }
+        .global-card .scroll-area { max-height: 190px; }
 
-        /* ✅ Tooltips */
+        /* ✅ Reports bar */
+        .reports-wrap{
+            display:flex;
+            flex-direction:column;
+            gap:0.35rem;
+            margin: 0.25rem 0 0.75rem 0;
+        }
+        .reports-title{
+            font-size:0.72rem;
+            font-weight:800;
+            color: var(--muted-foreground);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .reports-bar{
+            display:flex;
+            flex-wrap:wrap;
+            gap:0.35rem;
+        }
+        .day-chip{
+            border: 1px solid var(--border);
+            border-radius: 9999px;
+            padding: 0.25rem 0.55rem;
+            font-size: 0.72rem;
+            font-weight: 800;
+            cursor: pointer;
+            background: var(--rep-miss-bg);
+            color: var(--rep-miss-tx);
+            user-select:none;
+        }
+        .day-chip.ready{
+            background: var(--rep-ready-bg);
+            color: var(--rep-ready-tx);
+            border: none;
+        }
+        .day-chip.today{
+            background: var(--rep-today-bg);
+            color: var(--rep-today-tx);
+            border: none;
+        }
+        .day-chip:hover{ filter: brightness(0.98); }
+
         .trade-tooltip {
             position: fixed;
             z-index: 9999;
@@ -210,7 +258,6 @@
         .trade-tooltip .tt-sl { color: #fca5a5; }
         .trade-tooltip .tt-tp { color: #86efac; }
 
-        /* Make reason cell look hoverable */
         .reason-cell { cursor: help; }
     </style>
 </head>
@@ -258,10 +305,10 @@
                 <button id="resetPaper">Reset</button>
             </div>
 
-            <!-- ✅ Market session status under Apply/Reset -->
             <div class="market-status" id="marketStatus">
                 <div class="market-pill"><span class="dot"></span> London: --</div>
                 <div class="market-pill"><span class="dot"></span> New York: --</div>
+                <div class="market-pill"><span class="dot"></span> Tokyo: --</div>
             </div>
         </div>
 
@@ -285,7 +332,17 @@
         </div>
 
         <div class="card global-card" style="grid-column: 1 / -1;">
-            <div class="card-header">Global Performance (All Pairs) <span id="global-metrics"></span></div>
+            <div class="card-header">
+                <span>Global Performance (All Pairs)</span>
+                <span id="global-metrics"></span>
+            </div>
+
+            <!-- ✅ Month Reports bar -->
+            <div class="reports-wrap">
+                <div class="reports-title" id="reportsTitle">Current Month Reports</div>
+                <div class="reports-bar" id="monthReports"></div>
+            </div>
+
             <div class="scroll-area">
                 <table class="history-table">
                     <thead>
@@ -307,18 +364,11 @@
         </div>
     </div>
 
-    <!-- ✅ Tooltip element -->
     <div id="tradeTooltip" class="trade-tooltip"></div>
 
 <script>
-    // =========================
-    // ✅ CONFIG YOU MAY CHANGE
-    // =========================
-    const RESUME_URL = "/static/Timothy_Mandingwa_Resume.pdf"; // <-- change if your path differs
+    const RESUME_URL = "/static/Timothy_Mandingwa_Resume.pdf";
 
-    // =========================
-    // ✅ Timezone: viewer's browser
-    // =========================
     const userLocale = navigator.language || "en-US";
     const userTZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "Local";
     document.getElementById("appTitle").innerText = `FX TA Dashboard — ${userTZ}`;
@@ -326,15 +376,9 @@
     const resumeLink = document.getElementById("resumeLink");
     resumeLink.href = RESUME_URL;
 
-    // =========================
-    // ✅ WebSocket
-    // =========================
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
-    // =========================
-    // ✅ Chart
-    // =========================
     const chartEl = document.getElementById('chart');
     const chart = LightweightCharts.createChart(chartEl, {
         layout: { background: { color: 'transparent' }, textColor: '#71717a' },
@@ -358,25 +402,15 @@
     });
     const candleSeries = chart.addCandlestickSeries({ upColor: '#16a34a', downColor: '#dc2626' });
 
-    // =========================
-    // ✅ Helpers: parsing time robustly
-    // =========================
     function toDateAny(ts) {
         if (ts === null || ts === undefined || ts === "") return null;
-
-        // number: seconds or ms
         if (typeof ts === "number") {
-            // if looks like seconds (10 digits), convert to ms
             if (ts < 2e12) return new Date(ts * 1000);
             return new Date(ts);
         }
-
-        // string: ISO or "YYYY-MM-DD ..." etc.
         if (typeof ts === "string") {
             const d = new Date(ts);
             if (!Number.isNaN(d.getTime())) return d;
-
-            // if it's numeric string
             const n = Number(ts);
             if (!Number.isNaN(n)) {
                 if (n < 2e12) return new Date(n * 1000);
@@ -411,7 +445,7 @@
     }
 
     // =========================
-    // ✅ Market open status (London & NY)
+    // ✅ Market open status (London, NY, Tokyo)
     // =========================
     function getPartsInTZ(tz) {
         const dtf = new Intl.DateTimeFormat("en-US", {
@@ -431,9 +465,6 @@
         return ["Mon","Tue","Wed","Thu","Fri"].includes(wd);
     }
 
-    // Simple session windows (you asked “London open” & “New York open”)
-    // London: 08:00–17:00 (Europe/London)
-    // NY:     08:00–17:00 (America/New_York)
     function isSessionOpen(tz, startHH, startMM, endHH, endMM) {
         const p = getPartsInTZ(tz);
         const wd = p.weekday;
@@ -449,7 +480,8 @@
 
     function renderMarketStatus() {
         const londonOpen = isSessionOpen("Europe/London", 8, 0, 17, 0);
-        const nyOpen = isSessionOpen("America/New_York", 8, 0, 17, 0);
+        const nyOpen     = isSessionOpen("America/New_York", 8, 0, 17, 0);
+        const tokyoOpen  = isSessionOpen("Asia/Tokyo", 9, 0, 18, 0);
 
         const el = document.getElementById("marketStatus");
         el.innerHTML = `
@@ -461,15 +493,96 @@
                 <span class="dot ${nyOpen ? 'open' : 'closed'}"></span>
                 New York: <span style="font-weight:800; color:${nyOpen ? '#166534' : '#b91c1c'}">${nyOpen ? 'OPEN' : 'CLOSED'}</span>
             </div>
+            <div class="market-pill">
+                <span class="dot ${tokyoOpen ? 'open' : 'closed'}"></span>
+                Tokyo: <span style="font-weight:800; color:${tokyoOpen ? '#166534' : '#b91c1c'}">${tokyoOpen ? 'OPEN' : 'CLOSED'}</span>
+            </div>
         `;
     }
     renderMarketStatus();
-    setInterval(renderMarketStatus, 30_000); // refresh every 30s
+    setInterval(renderMarketStatus, 30_000);
 
     // =========================
-    // ✅ Tooltips: two modes
-    // 1) Row hover: Entry/SL/TP
-    // 2) Reason hover: full reason
+    // ✅ Month Reports UI
+    // =========================
+    function monthShortName(d) {
+        return new Intl.DateTimeFormat(userLocale, { month: 'short', timeZone: userTZ }).format(d);
+    }
+
+    function daysInMonth(year, monthIndex0) {
+        return new Date(year, monthIndex0 + 1, 0).getDate();
+    }
+
+    function ymdInTZ(dateObj) {
+        // build YYYY-MM-DD in userTZ
+        const parts = new Intl.DateTimeFormat("en-CA", {
+            timeZone: userTZ,
+            year: "numeric", month: "2-digit", day: "2-digit"
+        }).formatToParts(dateObj).reduce((acc,p)=>{acc[p.type]=p.value; return acc;}, {});
+        return `${parts.year}-${parts.month}-${parts.day}`;
+    }
+
+    function downloadReport(ymd) {
+        // expects backend route: /reports/YYYY-MM-DD.pdf
+        const a = document.createElement("a");
+        a.href = `/reports/${ymd}.pdf`;
+        a.download = `FX_Report_${ymd}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    }
+
+    function renderMonthReportsFromTrades(tradesLikeRows) {
+        const now = new Date();
+        const y = Number(new Intl.DateTimeFormat("en-CA", { timeZone: userTZ, year: "numeric" }).format(now));
+        const m = Number(new Intl.DateTimeFormat("en-CA", { timeZone: userTZ, month: "2-digit" }).format(now)) - 1;
+
+        const title = `${monthShortName(now)} Reports`;
+        document.getElementById("reportsTitle").innerText = title;
+
+        const dim = daysInMonth(y, m);
+        const todayDay = Number(new Intl.DateTimeFormat("en-CA", { timeZone: userTZ, day: "2-digit" }).format(now));
+
+        // collect days that have trades
+        const readyDays = new Set();
+        (tradesLikeRows || []).forEach(t => {
+            const ts = t.exit_time || t.closed_ts || t.closed_ts_epoch || t.entry_time || t.opened_ts;
+            const d = toDateAny(ts);
+            if (!d) return;
+            // only mark days in current month/year (in userTZ)
+            const ymd = ymdInTZ(d);
+            if (!ymd.startsWith(String(y) + "-")) return;
+            const mm = Number(ymd.split("-")[1]) - 1;
+            if (mm !== m) return;
+            const dd = Number(ymd.split("-")[2]);
+            readyDays.add(dd);
+        });
+
+        const bar = document.getElementById("monthReports");
+        bar.innerHTML = "";
+
+        for (let day = 1; day <= dim; day++) {
+            const chip = document.createElement("div");
+            chip.className = "day-chip";
+
+            if (readyDays.has(day)) chip.classList.add("ready");
+            if (day === todayDay) chip.classList.add("today");
+
+            chip.textContent = `${monthShortName(now)} ${day}`;
+            chip.title = readyDays.has(day) ? "Report ready" : "No trades logged for this day yet";
+
+            const ymd = `${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+            chip.onclick = () => {
+                if (!readyDays.has(day) && day > todayDay) return; // future day: ignore
+                downloadReport(ymd);
+            };
+
+            bar.appendChild(chip);
+        }
+    }
+
+    // =========================
+    // ✅ Tooltips (unchanged)
     // =========================
     const tooltip = document.getElementById("tradeTooltip");
 
@@ -511,6 +624,16 @@
         `;
     }
 
+    function escapeHTML(str) {
+        return (str || "").toString().replace(/[&<>"']/g, (m) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#39;",
+        }[m]));
+    }
+
     function buildReasonHTML(t) {
         const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
         const title = `${t.instrument || ""} ${t.tf || ""} · ${t.side || ""} · ${status}`.trim();
@@ -524,17 +647,6 @@
         `;
     }
 
-    function escapeHTML(str) {
-        return str.replace(/[&<>"']/g, (m) => ({
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            "\"": "&quot;",
-            "'": "&#39;",
-        }[m]));
-    }
-
-    // Hide tooltip on scroll/resizes
     document.querySelectorAll(".scroll-area").forEach(el => {
         el.addEventListener("scroll", hideTooltip, { passive: true });
     });
@@ -550,7 +662,6 @@
         const paper = data.paper;
 
         if (st && st.ok) {
-            // ✅ 4 decimal places
             document.getElementById("price-main").innerText = Number(st.close).toFixed(4);
             document.getElementById("rsi-val").innerText = Number(st.rsi).toFixed(2);
             document.getElementById("atr-val").innerText = Number(st.atr).toFixed(4);
@@ -591,6 +702,8 @@
                 `WR: ${wr}% | PnL: <span style="color:${pnl >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">${fmtMoney(pnl)}</span> | Trades: ${trades} | Open: ${gs.open_trades ?? 0}`;
 
             const rows = gs.timeline && gs.timeline.length ? gs.timeline : (gs.history || []);
+            renderMonthReportsFromTrades(rows);
+
             if (rows && rows.length > 0) {
                 document.getElementById("global-history-body").innerHTML = rows.map((t) => {
                     const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
@@ -599,7 +712,6 @@
                     const outcome = isOpen ? "—" : (t.outcome || t.result || "—");
                     const pnlVal = isOpen ? null : t.pnl_usd;
 
-                    // store trade payload for hover
                     const tradeJson = encodeURIComponent(JSON.stringify(t));
                     const reasonText = (t.reason || "").toString();
 
@@ -617,17 +729,12 @@
                             <td class="col-pnl" style="color:${(pnlVal ?? 0) >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">
                                 ${isOpen ? "--" : fmtMoney(pnlVal)}
                             </td>
-
-                            <!-- ✅ Reason cell hover shows full reason -->
-                            <td class="col-rsn reason-cell"
-                                data-reason="${encodeURIComponent(reasonText)}"
-                                style="font-style:italic;">
+                            <td class="col-rsn reason-cell" style="font-style:italic;">
                                 ${escapeHTML(reasonText)}
                             </td>
                         </tr>`;
                 }).join('');
 
-                // Attach hover handlers
                 document.querySelectorAll(".trade-row").forEach(row => {
                     const getTrade = () => {
                         try {
@@ -638,7 +745,6 @@
                         }
                     };
 
-                    // Hover anywhere on row = show Entry/SL/TP tooltip
                     row.addEventListener("mouseenter", (e) => {
                         const t = getTrade();
                         if (!t) return;
@@ -660,7 +766,6 @@
 
                     row.addEventListener("mouseleave", hideTooltip);
 
-                    // Hover specifically on reason cell = show full reason tooltip (override)
                     const reasonCell = row.querySelector(".reason-cell");
                     if (reasonCell) {
                         reasonCell.addEventListener("mouseenter", (e) => {
@@ -668,34 +773,14 @@
                             if (!t) return;
                             showTooltipAt(e.clientX, e.clientY, buildReasonHTML(t), "reason");
                         });
-
-                        reasonCell.addEventListener("mousemove", (e) => {
-                            if (tooltip.style.display !== "block") return;
-                            const x = e.clientX, y = e.clientY;
-                            const rect = tooltip.getBoundingClientRect();
-                            let left = x + 12;
-                            let top  = y + 12;
-                            const pad = 12;
-                            if (left + rect.width + pad > window.innerWidth) left = x - rect.width - 12;
-                            if (top + rect.height + pad > window.innerHeight) top = y - rect.height - 12;
-                            tooltip.style.left = `${Math.max(pad, left)}px`;
-                            tooltip.style.top  = `${Math.max(pad, top)}px`;
-                        });
-
-                        // when leaving reason, go back to levels tooltip for row if still inside row
-                        reasonCell.addEventListener("mouseleave", (e) => {
-                            const t = getTrade();
-                            if (!t) { hideTooltip(); return; }
-                            // If still over the row, show levels again
-                            // We can safely show levels at current mouse position (last known)
-                            hideTooltip();
-                        });
+                        reasonCell.addEventListener("mouseleave", hideTooltip);
                     }
                 });
 
             } else {
                 document.getElementById("global-history-body").innerHTML =
                     `<tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--muted-foreground);">Waiting for trades...</td></tr>`;
+                renderMonthReportsFromTrades([]);
             }
         }
     };
