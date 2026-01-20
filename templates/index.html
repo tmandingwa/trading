@@ -209,6 +209,8 @@
             background: var(--rep-miss-bg);
             color: var(--rep-miss-tx);
             user-select:none;
+            min-width: 34px;
+            text-align:center;
         }
         .day-chip.ready{
             background: var(--rep-ready-bg);
@@ -503,7 +505,7 @@
     setInterval(renderMarketStatus, 30_000);
 
     // =========================
-    // ✅ Month Reports UI
+    // ✅ Month Reports UI (NUMBERS ONLY)
     // =========================
     function monthShortName(d) {
         return new Intl.DateTimeFormat(userLocale, { month: 'short', timeZone: userTZ }).format(d);
@@ -514,7 +516,6 @@
     }
 
     function ymdInTZ(dateObj) {
-        // build YYYY-MM-DD in userTZ
         const parts = new Intl.DateTimeFormat("en-CA", {
             timeZone: userTZ,
             year: "numeric", month: "2-digit", day: "2-digit"
@@ -523,7 +524,6 @@
     }
 
     function downloadReport(ymd) {
-        // expects backend route: /reports/YYYY-MM-DD.pdf
         const a = document.createElement("a");
         a.href = `/reports/${ymd}.pdf`;
         a.download = `FX_Report_${ymd}.pdf`;
@@ -537,24 +537,19 @@
         const y = Number(new Intl.DateTimeFormat("en-CA", { timeZone: userTZ, year: "numeric" }).format(now));
         const m = Number(new Intl.DateTimeFormat("en-CA", { timeZone: userTZ, month: "2-digit" }).format(now)) - 1;
 
-        const title = `${monthShortName(now)} Reports`;
-        document.getElementById("reportsTitle").innerText = title;
+        document.getElementById("reportsTitle").innerText = `${monthShortName(now)} Reports`;
 
         const dim = daysInMonth(y, m);
         const todayDay = Number(new Intl.DateTimeFormat("en-CA", { timeZone: userTZ, day: "2-digit" }).format(now));
 
-        // collect days that have trades
         const readyDays = new Set();
         (tradesLikeRows || []).forEach(t => {
             const ts = t.exit_time || t.closed_ts || t.closed_ts_epoch || t.entry_time || t.opened_ts;
             const d = toDateAny(ts);
             if (!d) return;
-            // only mark days in current month/year (in userTZ)
             const ymd = ymdInTZ(d);
-            if (!ymd.startsWith(String(y) + "-")) return;
-            const mm = Number(ymd.split("-")[1]) - 1;
-            if (mm !== m) return;
-            const dd = Number(ymd.split("-")[2]);
+            const [yy, mm, dd] = ymd.split("-").map(Number);
+            if (yy !== y || (mm - 1) !== m) return;
             readyDays.add(dd);
         });
 
@@ -564,16 +559,17 @@
         for (let day = 1; day <= dim; day++) {
             const chip = document.createElement("div");
             chip.className = "day-chip";
+            chip.textContent = String(day); // ✅ numbers only
 
             if (readyDays.has(day)) chip.classList.add("ready");
             if (day === todayDay) chip.classList.add("today");
 
-            chip.textContent = `${monthShortName(now)} ${day}`;
             chip.title = readyDays.has(day) ? "Report ready" : "No trades logged for this day yet";
 
             const ymd = `${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
             chip.onclick = () => {
-                if (!readyDays.has(day) && day > todayDay) return; // future day: ignore
+                // allow download for past days even if no trades (backend can return "empty report" PDF if you want)
+                if (day > todayDay) return;
                 downloadReport(ymd);
             };
 
@@ -582,7 +578,7 @@
     }
 
     // =========================
-    // ✅ Tooltips (unchanged)
+    // ✅ Tooltips
     // =========================
     const tooltip = document.getElementById("tradeTooltip");
 
@@ -608,6 +604,8 @@
         tooltip.classList.remove("reason");
     }
 
+    function fmtPxSafe(x){ return fmtPx(x); }
+
     function buildTradeLevelsHTML(t) {
         const status = (t.status || (t.exit_time ? "CLOSED" : "OPEN"));
         const title = `${t.instrument || ""} ${t.tf || ""} · ${t.side || ""} · ${status}`.trim();
@@ -618,9 +616,9 @@
 
         return `
             <div class="tt-title">${title}</div>
-            <div class="tt-row"><span class="tt-key">Entry</span><span class="tt-val">${fmtPx(entry)}</span></div>
-            <div class="tt-row"><span class="tt-key">SL</span><span class="tt-val tt-sl">${fmtPx(sl)}</span></div>
-            <div class="tt-row"><span class="tt-key">TP</span><span class="tt-val tt-tp">${fmtPx(tp)}</span></div>
+            <div class="tt-row"><span class="tt-key">Entry</span><span class="tt-val">${fmtPxSafe(entry)}</span></div>
+            <div class="tt-row"><span class="tt-key">SL</span><span class="tt-val tt-sl">${fmtPxSafe(sl)}</span></div>
+            <div class="tt-row"><span class="tt-key">TP</span><span class="tt-val tt-tp">${fmtPxSafe(tp)}</span></div>
         `;
     }
 
