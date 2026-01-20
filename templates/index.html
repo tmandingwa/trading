@@ -44,7 +44,6 @@
             background: var(--secondary); color: var(--foreground);
         }
 
-        /* tighter overall spacing to fit 1 screen */
         body {
             display: flex;
             flex-direction: column;
@@ -84,7 +83,6 @@
             gap: 0.75rem;
             min-height: 0;
             grid-template-columns: 300px 1fr 340px;
-            /* two tall rows + compact global row */
             grid-template-rows: 1fr 1fr 235px;
         }
 
@@ -92,7 +90,7 @@
             background: var(--card);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 1rem; /* tighter */
+            padding: 1rem;
             display: flex;
             flex-direction: column;
             min-height: 0;
@@ -104,7 +102,7 @@
             font-weight: 700;
             text-transform: uppercase;
             color: var(--muted-foreground);
-            margin-bottom: 0.6rem; /* tighter */
+            margin-bottom: 0.6rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -145,7 +143,6 @@
         #apply { background: var(--primary); color: var(--primary-foreground); }
         #resetPaper { background: var(--secondary); color: var(--secondary-foreground); border: 1px solid var(--border); }
 
-        /* ✅ 1-line space between Apply/Reset and market list */
         .btn-row { display:flex; gap:0.5rem; margin-bottom: 0.75rem; }
 
         .market-status {
@@ -198,7 +195,7 @@
         .history-table { width: 100%; border-collapse: collapse; font-size: 0.74rem; table-layout: fixed; }
         .history-table th {
             text-align: left;
-            padding: 0.55rem 0.45rem; /* tighter */
+            padding: 0.55rem 0.45rem;
             color: var(--muted-foreground);
             border-bottom: 1px solid var(--border);
             font-weight: 800;
@@ -228,10 +225,7 @@
         #chart { flex-grow: 1; width: 100%; height: 100%; }
 
         .global-card { height: 235px; }
-        .global-card .scroll-area {
-            height: 138px;
-            max-height: 138px;
-        }
+        .global-card .scroll-area { height: 138px; max-height: 138px; }
 
         .trade-tooltip {
             position: fixed;
@@ -420,7 +414,6 @@
             <div class="metric-box"><span class="metric-label">RSI</span><span class="metric-value" id="rsi-val">--.--</span></div>
             <div class="metric-box"><span class="metric-label">ATR</span><span class="metric-value" id="atr-val">--.-----</span></div>
         </div>
-        <!-- ✅ removed the crossed "reason" box -->
     </div>
 
     <div class="card">
@@ -487,7 +480,7 @@
     const RESUME_URL = "/static/Timothy_Mandingwa_Resume.pdf";
 
     const userLocale = navigator.language || "en-US";
-    const userTZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "Local";
+    const userTZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     document.getElementById("appTitle").innerText = `FX TA Dashboard — ${userTZ}`;
 
     const resumeLink = document.getElementById("resumeLink");
@@ -496,23 +489,57 @@
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
+    // ========= LOCAL TIME FORMATTERS (forces axis labels to userTZ)
+    const axisTimeFmt = new Intl.DateTimeFormat(userLocale, {
+        timeZone: userTZ,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+    });
+
+    const axisDateFmt = new Intl.DateTimeFormat(userLocale, {
+        timeZone: userTZ,
+        month: 'short',
+        day: '2-digit',
+    });
+
+    function tickToLocalLabel(time) {
+        // lightweight-charts may pass seconds number, or { year, month, day }
+        if (typeof time === 'number') {
+            return axisTimeFmt.format(new Date(time * 1000));
+        }
+        if (time && typeof time === 'object' && 'year' in time) {
+            // Convert business-day-like object to UTC midnight then format in userTZ
+            const d = new Date(Date.UTC(time.year, (time.month - 1), time.day, 0, 0, 0));
+            return axisDateFmt.format(d);
+        }
+        return '';
+    }
+
     // ===== Chart
     const chartEl = document.getElementById('chart');
 
-    // ✅ IMPORTANT:
-    // Lightweight-charts renders the time axis in the browser's LOCAL time by default.
-    // Your input `time` should be UTC seconds (which you already send).
-    // So: DO NOT override tick formatting with a different timezone (it can create mismatches).
     const chart = LightweightCharts.createChart(chartEl, {
         layout: { background: { color: 'transparent' }, textColor: '#71717a' },
         grid: { vertLines: { color: '#e4e4e7' }, horzLines: { color: '#e4e4e7' } },
         localization: {
-            locale: userLocale
+            locale: userLocale,
+            // Keep internal time as UTC seconds, but LABELS in user local TZ
+            timeFormatter: (time) => tickToLocalLabel(time),
         },
-        timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#e4e4e7' },
+        timeScale: {
+            timeVisible: true,
+            secondsVisible: false,
+            borderColor: '#e4e4e7',
+            // Force x-axis tick labels in user local TZ
+            tickMarkFormatter: (time) => tickToLocalLabel(time),
+        },
+        rightPriceScale: {
+            borderColor: '#e4e4e7',
+        }
     });
 
-    // ✅ 5-decimal Y-axis labels
+    // ✅ PRICE: always show 5 decimals (no 4-dec rounding)
     const candleSeries = chart.addCandlestickSeries({
         upColor: '#16a34a',
         downColor: '#dc2626',
@@ -555,6 +582,7 @@
         return `$${v.toFixed(2)}`;
     }
 
+    // ✅ Always 5 decimals everywhere you show a price
     function fmtPx5(x) {
         const v = Number(x);
         if (x === null || x === undefined || Number.isNaN(v)) return "--";
@@ -750,11 +778,10 @@
                 st.side !== "NO_TRADE" ? `<span class="status-badge ready">${st.side}</span>` : "";
         }
 
-        // ✅ X-axis local time fix:
-        // Pass UTC seconds. Browser displays it in local time automatically.
+        // ✅ Candles: keep UTC seconds (from OANDA) and axis labels will display in userTZ
         if (data.candles) {
             candleSeries.setData(data.candles.map(c => ({
-                time: Math.floor(c.t / 1000), // seconds UTC
+                time: Math.floor(c.t / 1000), // UTC seconds
                 open: c.o, high: c.h, low: c.l, close: c.c
             })));
         }
