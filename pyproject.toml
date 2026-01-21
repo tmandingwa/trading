@@ -1,26 +1,22 @@
 [project]
 name = "live-app-rules"
 version = "0.1.0"
-description = "Add your description here"
+description = "Live FX rules + ML dashboard"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "asyncio>=4.0.0",
-    "dataclasses>=0.8",
-    "fastapi>=0.128.0",
-    "httpx>=0.28.1",
-    "jinja2>=3.1.6",
-    "pandas>=2.3.3",
-    "starlette>=0.50.0",
-    "uvicorn[standard]>=0.40.0",
-    "websockets>=16.0",
-    "wsproto>=1.3.2",
-"numpy",
-"scikit-learn",
-"joblib",
-"python-dotenv",
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "starlette>=0.37.2",
+  "jinja2>=3.1.4",
+  "python-dotenv>=1.0.1",
 
+  "pandas>=2.2.2",
+  "numpy>=2.0.0",
+  "scikit-learn>=1.5.1",
+  "joblib>=1.4.2",
+
+  "httpx>=0.27.0",
+  "websockets>=12.0",
+  "wsproto>=1.2.0",
 ]
-
-
-
