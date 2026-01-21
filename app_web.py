@@ -29,6 +29,9 @@ from oanda_history import fetch_candles
 from strategy_rules import compute_state
 from paper_engine import PaperEngine
 
+# ✅ NEW: ML loader (expects you created ml_model.py)
+from ml_model import load_models_from_dir
+
 # ============================================================
 # PATHS
 # ============================================================
@@ -61,36 +64,105 @@ GLOBAL_TRADE_HISTORY_LIMIT = int(os.getenv("GLOBAL_TRADE_HISTORY_LIMIT", "5000")
 GLOBAL_OPEN_LIMIT = int(os.getenv("GLOBAL_OPEN_LIMIT", "200"))
 GLOBAL_CLOSED_LIMIT = int(os.getenv("GLOBAL_CLOSED_LIMIT", "5000"))
 
+# ✅ NEW: ML artifacts directory + models cache
+ARTIFACTS_DIR = os.getenv("ARTIFACTS_DIR", os.path.join(BASE_DIR, "artifacts"))
+ML_MODELS: Dict[str, Any] = {}
+
 STREAM_TASK: asyncio.Task | None = None
 ENGINE_TASK: asyncio.Task | None = None
 
 ENGINE_LOCKS: Dict[Tuple[str, str], asyncio.Lock] = {}
 LAST_ENGINE_CANDLE: Dict[Tuple[str, str], int] = {}  # last processed CLOSED candle time (ns)
 
+
 def init_db():
     db_dir = os.path.dirname(DB_PATH)
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
+
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS engine_state (instrument TEXT, tf TEXT, balance REAL, balance_start REAL, PRIMARY KEY (instrument, tf))"
-        )
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS open_positions (instrument TEXT, tf TEXT, side TEXT, entry_time TEXT, entry REAL, sl REAL, tp REAL, units REAL, reason TEXT, PRIMARY KEY (instrument, tf))"
-        )
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS trade_history (id INTEGER PRIMARY KEY AUTOINCREMENT, instrument TEXT, tf TEXT, side TEXT, entry_time TEXT, exit_time TEXT, entry REAL, exit_px REAL, sl REAL, tp REAL, units REAL, pnl_usd REAL, outcome TEXT, reason TEXT)"
-        )
+        # Base tables (keep yours, but add missing cols safely)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS engine_state (
+                instrument TEXT,
+                tf TEXT,
+                balance REAL,
+                balance_start REAL,
+                cooldown_until TEXT,
+                PRIMARY KEY (instrument, tf)
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS open_positions (
+                instrument TEXT,
+                tf TEXT,
+                side TEXT,
+                entry_time TEXT,
+                entry REAL,
+                sl REAL,
+                tp REAL,
+                units REAL,
+                reason TEXT,
+                model_prob REAL,
+                PRIMARY KEY (instrument, tf)
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trade_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instrument TEXT,
+                tf TEXT,
+                side TEXT,
+                entry_time TEXT,
+                exit_time TEXT,
+                entry REAL,
+                exit_px REAL,
+                sl REAL,
+                tp REAL,
+                units REAL,
+                pnl_usd REAL,
+                outcome TEXT,
+                reason TEXT,
+                model_prob REAL
+            )
+        """)
+
+        # Lightweight migrations for older DBs
+        def _cols(table: str) -> List[str]:
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            return [r[1] for r in rows]
+
+        # engine_state: cooldown_until
+        cols = _cols("engine_state")
+        if "cooldown_until" not in cols:
+            conn.execute("ALTER TABLE engine_state ADD COLUMN cooldown_until TEXT")
+
+        # open_positions: model_prob
+        cols = _cols("open_positions")
+        if "model_prob" not in cols:
+            conn.execute("ALTER TABLE open_positions ADD COLUMN model_prob REAL")
+
+        # trade_history: model_prob
+        cols = _cols("trade_history")
+        if "model_prob" not in cols:
+            conn.execute("ALTER TABLE trade_history ADD COLUMN model_prob REAL")
+
+        conn.commit()
+
 
 def db_fetchone(query: str, params: tuple = ()):
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(query, params)
         return cur.fetchone()
 
+
 def db_fetchall(query: str, params: tuple = ()):
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(query, params)
         return cur.fetchall()
+
 
 app = FastAPI()
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
@@ -133,6 +205,7 @@ for inst in SUPPORTED_INSTRUMENTS:
     for tf in SUPPORTED_TFS:
         ENGINE_LOCKS[(inst, tf)] = asyncio.Lock()
 
+
 @app.middleware("http")
 async def log_http_requests(request: Request, call_next):
     t0 = time.time()
@@ -146,10 +219,11 @@ async def log_http_requests(request: Request, call_next):
         print(f"[http][ERR] {request.method} {request.url.path} crashed after {dt:.1f}ms: {repr(e)}", flush=True)
         raise
 
+
 def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> Dict[str, Any]:
     open_rows = db_fetchall(
         """
-        SELECT instrument, tf, side, entry_time, entry, sl, tp, units, reason
+        SELECT instrument, tf, side, entry_time, entry, sl, tp, units, reason, model_prob
         FROM open_positions
         ORDER BY entry_time DESC
         LIMIT ?
@@ -162,6 +236,7 @@ def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> 
             "instrument": r[0], "tf": r[1], "side": r[2],
             "entry_time": r[3], "entry": r[4], "sl": r[5],
             "tp": r[6], "units": r[7], "reason": r[8],
+            "model_prob": r[9],
         })
 
     open_count_row = db_fetchone("SELECT COUNT(*) FROM open_positions")
@@ -190,7 +265,7 @@ def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> 
 
     closed_rows = db_fetchall(
         """
-        SELECT instrument, tf, side, entry_time, exit_time, entry, exit_px, sl, tp, units, pnl_usd, outcome, reason
+        SELECT instrument, tf, side, entry_time, exit_time, entry, exit_px, sl, tp, units, pnl_usd, outcome, reason, model_prob
         FROM trade_history
         WHERE exit_time IS NOT NULL AND exit_time != ''
         ORDER BY exit_time DESC
@@ -206,6 +281,7 @@ def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> 
             "entry": r[5], "exit_px": r[6],
             "sl": r[7], "tp": r[8], "units": r[9],
             "pnl_usd": r[10], "outcome": r[11], "reason": r[12],
+            "model_prob": r[13],
         })
 
     total_finished = wins + losses
@@ -222,10 +298,11 @@ def get_global_metrics_from_db(limit_closed: int = 25, limit_open: int = 25) -> 
         "closed_history": closed_trades,
     }
 
+
 def build_global_timeline(limit: int = 5000) -> List[Dict[str, Any]]:
     open_rows = db_fetchall(
         """
-        SELECT instrument, tf, side, entry_time, entry, sl, tp, units, reason
+        SELECT instrument, tf, side, entry_time, entry, sl, tp, units, reason, model_prob
         FROM open_positions
         ORDER BY entry_time DESC
         LIMIT ?
@@ -241,11 +318,12 @@ def build_global_timeline(limit: int = 5000) -> List[Dict[str, Any]]:
             "entry": r[4], "sl": r[5], "tp": r[6],
             "units": r[7], "pnl_usd": None, "outcome": None,
             "reason": r[8],
+            "model_prob": r[9],
         })
 
     closed_rows = db_fetchall(
         """
-        SELECT instrument, tf, side, entry_time, exit_time, entry, exit_px, sl, tp, units, pnl_usd, outcome, reason
+        SELECT instrument, tf, side, entry_time, exit_time, entry, exit_px, sl, tp, units, pnl_usd, outcome, reason, model_prob
         FROM trade_history
         WHERE exit_time IS NOT NULL AND exit_time != ''
         ORDER BY exit_time DESC
@@ -262,6 +340,7 @@ def build_global_timeline(limit: int = 5000) -> List[Dict[str, Any]]:
             "entry": r[5], "exit_px": r[6],
             "sl": r[7], "tp": r[8], "units": r[9],
             "pnl_usd": r[10], "outcome": r[11], "reason": r[12],
+            "model_prob": r[13],
         })
 
     def _ts_key(x: Dict[str, Any]) -> str:
@@ -270,6 +349,7 @@ def build_global_timeline(limit: int = 5000) -> List[Dict[str, Any]]:
     all_items = open_items + closed_items
     all_items.sort(key=_ts_key, reverse=True)
     return all_items[:limit]
+
 
 def get_global_paper_stats():
     total_trades, total_wins, total_pnl, global_history = 0, 0, 0.0, []
@@ -307,9 +387,11 @@ def get_global_paper_stats():
         "timeline": timeline,
     }
 
+
 @app.get("/ping")
 async def ping():
     return PlainTextResponse("pong")
+
 
 @app.get("/healthz")
 async def healthz():
@@ -322,14 +404,25 @@ async def healthz():
         "index_template_exists": os.path.exists(INDEX_TEMPLATE_PATH),
         "auto_engine_all": AUTO_ENGINE_ALL,
         "global_trade_history_limit": GLOBAL_TRADE_HISTORY_LIMIT,
+        "artifacts_dir": ARTIFACTS_DIR,
+        "ml_models_loaded": list(ML_MODELS.keys()),
     })
+
 
 @app.on_event("startup")
 async def on_startup():
-    global STREAM_TASK, ENGINE_TASK
+    global STREAM_TASK, ENGINE_TASK, ML_MODELS
     print("[startup] on_startup() entered ✅", flush=True)
 
     init_db()
+
+    # ✅ Load ML models once
+    try:
+        ML_MODELS = load_models_from_dir(ARTIFACTS_DIR)
+        print(f"[ml] loaded models from {ARTIFACTS_DIR}: {list(ML_MODELS.keys())}", flush=True)
+    except Exception as e:
+        ML_MODELS = {}
+        print(f"[ml][WARN] could not load models: {repr(e)}", flush=True)
 
     if (not OANDA_TOKEN or not OANDA_ACCOUNT_ID) and FAIL_FAST_IF_NO_OANDA:
         raise RuntimeError("Missing OANDA_TOKEN or OANDA_ACCOUNT_ID (set Railway Variables).")
@@ -350,6 +443,7 @@ async def on_startup():
     if AUTO_ENGINE_ALL:
         ENGINE_TASK = asyncio.create_task(engine_loop_all())
         print("[startup] Auto-engine (ALL pairs/TFs) started ✅", flush=True)
+
 
 async def stream_loop():
     instruments = ",".join(SUPPORTED_INSTRUMENTS)
@@ -382,6 +476,7 @@ async def stream_loop():
             print(f"[stream][WARN] unexpected error: {repr(e)} — reconnecting in {STREAM_RETRY_SECONDS}s…", flush=True)
             await asyncio.sleep(STREAM_RETRY_SECONDS)
 
+
 def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
     if df is None or df.empty:
         return []
@@ -396,6 +491,7 @@ def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
         }
         for ts, row in d.iterrows()
     ]
+
 
 async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: float):
     """
@@ -419,20 +515,35 @@ async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: floa
         except Exception:
             latest_closed_ts_ns = int(time.time() * 1e9)
 
+        pe = PAPER[inst][tf]
+
+        # ✅ Build per-call cfg (TF + cooldown + ML)
+        cfg2 = dict(CFG)
+        cfg2["TF"] = tf
+        cfg2.update(pe.build_strategy_cfg())
+
+        cfg2["ML_ENABLED"] = True
+        cfg2["ML_MODELS"] = ML_MODELS
+        # Optional overrides:
+        # cfg2["ML_BUY_TH"] = 0.54
+        # cfg2["ML_SELL_TH"] = 0.46
+
         last = LAST_ENGINE_CANDLE.get(key)
         if last is not None and latest_closed_ts_ns <= last:
-            state = compute_state(df, CFG)
+            state = compute_state(df, cfg2)
             return state, df
 
         LAST_ENGINE_CANDLE[key] = latest_closed_ts_ns
 
-        state = compute_state(df, CFG)
-        pe = PAPER[inst][tf]
+        state = compute_state(df, cfg2)
 
-        pe.update_on_new_closed_candle(df)
+        # ✅ Pass plan so BE/Trail uses the plan settings (if any)
+        plan = (state or {}).get("plan") if isinstance(state, dict) else None
+        pe.update_on_new_closed_candle(df, plan=plan)
         pe.maybe_enter(state, df, balance, risk_pct)
 
         return state, df
+
 
 async def engine_loop_all():
     print("[engine] engine_loop_all started ✅", flush=True)
@@ -445,6 +556,7 @@ async def engine_loop_all():
             print("[engine][WARN] loop error:", repr(e), flush=True)
 
         await asyncio.sleep(AUTO_ENGINE_SLEEP)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -473,6 +585,7 @@ async def root(request: Request):
 
     except Exception as e:
         return HTMLResponse(content=f"<h3>UI failed but backend running</h3><pre>{repr(e)}</pre>", status_code=200)
+
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):

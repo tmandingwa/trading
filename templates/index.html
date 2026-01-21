@@ -222,6 +222,26 @@
         .pos-side { font-weight: 850; font-size: 0.78rem; }
         .pos-row { display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.3rem; }
 
+        /* ✅ NEW: model prob badge */
+        .prob-pill{
+            display:inline-flex;
+            align-items:center;
+            gap:0.35rem;
+            padding: 0.12rem 0.5rem;
+            border-radius: 9999px;
+            font-weight: 900;
+            font-size: 0.70rem;
+            border: 1px solid var(--border);
+            background: var(--secondary);
+            color: var(--muted-foreground);
+            white-space: nowrap;
+        }
+        .prob-pill strong{
+            color: var(--foreground);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-weight: 950;
+        }
+
         #chart { flex-grow: 1; width: 100%; height: 100%; }
 
         .global-card { height: 235px; }
@@ -255,6 +275,7 @@
         .trade-tooltip .tt-val { font-weight: 900; }
         .trade-tooltip .tt-sl { color: #fca5a5; }
         .trade-tooltip .tt-tp { color: #86efac; }
+        .trade-tooltip .tt-prob { color: rgba(255,255,255,0.92); }
 
         .reason-cell { cursor: help; }
 
@@ -589,6 +610,25 @@
         return v.toFixed(5);
     }
 
+    // ✅ NEW: model probability formatter
+    function fmtProb(x) {
+        if (x === null || x === undefined || x === "") return "—";
+        const v = Number(x);
+        if (Number.isNaN(v)) return "—";
+        return v.toFixed(2);
+    }
+
+    // ✅ NEW: safely read prob from multiple possible keys
+    function getProbFromTradeOrState(obj) {
+        if (!obj) return null;
+        // state might send model_probability; engine stores model_prob
+        const p =
+            obj.model_probability ?? obj.model_prob ?? obj.modelProb ?? obj.probability ?? null;
+        if (p === null || p === undefined) return null;
+        const n = Number(p);
+        return Number.isNaN(n) ? null : n;
+    }
+
     // ===== Market sessions
     function getPartsInTZ(tz) {
         const dtf = new Intl.DateTimeFormat("en-US", {
@@ -741,11 +781,14 @@
         const sl    = (t.sl ?? t.stop_loss ?? null);
         const tp    = (t.tp ?? t.take_profit ?? null);
 
+        const prob = getProbFromTradeOrState(t);
+
         return `
             <div class="tt-title">${title}</div>
             <div class="tt-row"><span class="tt-key">Entry</span><span class="tt-val">${fmtPx5(entry)}</span></div>
             <div class="tt-row"><span class="tt-key">SL</span><span class="tt-val tt-sl">${fmtPx5(sl)}</span></div>
             <div class="tt-row"><span class="tt-key">TP</span><span class="tt-val tt-tp">${fmtPx5(tp)}</span></div>
+            <div class="tt-row"><span class="tt-key">Model Prob</span><span class="tt-val tt-prob">${prob === null ? "—" : fmtProb(prob)}</span></div>
         `;
     }
 
@@ -789,15 +832,26 @@
         const posContainer = document.getElementById("paperPositionContainer");
         if (paper && paper.open_position) {
             const pos = paper.open_position;
+            const prob = getProbFromTradeOrState(pos);
+
             posContainer.innerHTML = `
                 <div class="pos-card">
                     <div class="pos-header">
                         <span class="pos-side" style="color:${pos.side === 'BUY' ? 'var(--tp-color)' : 'var(--sl-color)'}">${pos.side} OPEN</span>
                         <span style="font-size:0.7rem; color:var(--muted-foreground);">${formatTimeLocal(pos.entry_time)}</span>
                     </div>
+
                     <div class="pos-row"><span>Entry</span><span class="metric-value">${fmtPx5(pos.entry)}</span></div>
                     <div class="pos-row"><span>SL</span><span class="metric-value" style="color:var(--sl-color)">${fmtPx5(pos.sl)}</span></div>
                     <div class="pos-row"><span>TP</span><span class="metric-value" style="color:var(--tp-color)">${fmtPx5(pos.tp)}</span></div>
+
+                    <!-- ✅ NEW: Model Probability under Entry/SL/TP -->
+                    <div class="pos-row">
+                        <span>Model Prob</span>
+                        <span class="prob-pill" title="Probability from the ML direction model">
+                            <span>p</span><strong>${prob === null ? "—" : fmtProb(prob)}</strong>
+                        </span>
+                    </div>
                 </div>`;
         } else {
             posContainer.innerHTML = `<div style="font-size:0.8rem; color:var(--muted-foreground); text-align:center; padding:1.4rem 1rem;">No active trades.</div>`;
@@ -823,6 +877,10 @@
                     const tradeJson = encodeURIComponent(JSON.stringify(t));
                     const reasonText = (t.reason || "").toString();
 
+                    // ✅ NEW: read model prob (stored in DB + timeline)
+                    const prob = getProbFromTradeOrState(t);
+                    const probText = (prob === null ? "—" : fmtProb(prob));
+
                     return `
                         <tr class="trade-row" data-trade="${tradeJson}">
                             <td class="col-time">${formatTimeLocal(timeShow)}</td>
@@ -837,8 +895,9 @@
                             <td class="col-pnl" style="color:${(pnlVal ?? 0) >= 0 ? 'var(--tp-color)' : 'var(--sl-color)'}">
                                 ${isOpen ? "--" : fmtMoney(pnlVal)}
                             </td>
+                            <!-- ✅ UPDATED: show a short reason + model prob at the end -->
                             <td class="col-rsn reason-cell" style="font-style:italic;">
-                                ${escapeHTML(reasonText)}
+                                ${escapeHTML(reasonText)} <span style="font-style:normal; color:var(--muted-foreground); font-weight:900;">(p=${probText})</span>
                             </td>
                         </tr>`;
                 }).join('');
