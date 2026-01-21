@@ -29,7 +29,7 @@ from oanda_history import fetch_candles
 from strategy_rules import compute_state
 from paper_engine import PaperEngine
 
-# ✅ NEW: ML loader (expects you created ml_model.py)
+# ✅ ML loader (now exists in ml_model.py)
 from ml_model import load_models_from_dir
 
 # ============================================================
@@ -64,9 +64,9 @@ GLOBAL_TRADE_HISTORY_LIMIT = int(os.getenv("GLOBAL_TRADE_HISTORY_LIMIT", "5000")
 GLOBAL_OPEN_LIMIT = int(os.getenv("GLOBAL_OPEN_LIMIT", "200"))
 GLOBAL_CLOSED_LIMIT = int(os.getenv("GLOBAL_CLOSED_LIMIT", "5000"))
 
-# ✅ NEW: ML artifacts directory + models cache
+# ✅ ML artifacts directory + models cache
 ARTIFACTS_DIR = os.getenv("ARTIFACTS_DIR", os.path.join(BASE_DIR, "artifacts"))
-ML_MODELS: Dict[str, Any] = {}
+ML_MODELS: Dict[str, Any] = {}  # contains {"store": ..., "loaded_tfs": ...}
 
 STREAM_TASK: asyncio.Task | None = None
 ENGINE_TASK: asyncio.Task | None = None
@@ -81,7 +81,6 @@ def init_db():
         os.makedirs(db_dir, exist_ok=True)
 
     with sqlite3.connect(DB_PATH) as conn:
-        # Base tables (keep yours, but add missing cols safely)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS engine_state (
                 instrument TEXT,
@@ -129,22 +128,18 @@ def init_db():
             )
         """)
 
-        # Lightweight migrations for older DBs
         def _cols(table: str) -> List[str]:
             rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
             return [r[1] for r in rows]
 
-        # engine_state: cooldown_until
         cols = _cols("engine_state")
         if "cooldown_until" not in cols:
             conn.execute("ALTER TABLE engine_state ADD COLUMN cooldown_until TEXT")
 
-        # open_positions: model_prob
         cols = _cols("open_positions")
         if "model_prob" not in cols:
             conn.execute("ALTER TABLE open_positions ADD COLUMN model_prob REAL")
 
-        # trade_history: model_prob
         cols = _cols("trade_history")
         if "model_prob" not in cols:
             conn.execute("ALTER TABLE trade_history ADD COLUMN model_prob REAL")
@@ -406,6 +401,7 @@ async def healthz():
         "global_trade_history_limit": GLOBAL_TRADE_HISTORY_LIMIT,
         "artifacts_dir": ARTIFACTS_DIR,
         "ml_models_loaded": list(ML_MODELS.keys()),
+        "ml_loaded_tfs": (ML_MODELS.get("loaded_tfs") if isinstance(ML_MODELS, dict) else None),
     })
 
 
@@ -419,7 +415,7 @@ async def on_startup():
     # ✅ Load ML models once
     try:
         ML_MODELS = load_models_from_dir(ARTIFACTS_DIR)
-        print(f"[ml] loaded models from {ARTIFACTS_DIR}: {list(ML_MODELS.keys())}", flush=True)
+        print(f"[ml] loaded models from {ARTIFACTS_DIR}: keys={list(ML_MODELS.keys())} tfs={ML_MODELS.get('loaded_tfs')}", flush=True)
     except Exception as e:
         ML_MODELS = {}
         print(f"[ml][WARN] could not load models: {repr(e)}", flush=True)
@@ -524,9 +520,7 @@ async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: floa
 
         cfg2["ML_ENABLED"] = True
         cfg2["ML_MODELS"] = ML_MODELS
-        # Optional overrides:
-        # cfg2["ML_BUY_TH"] = 0.54
-        # cfg2["ML_SELL_TH"] = 0.46
+        cfg2["ML_STORE"] = ML_MODELS.get("store") if isinstance(ML_MODELS, dict) else None
 
         last = LAST_ENGINE_CANDLE.get(key)
         if last is not None and latest_closed_ts_ns <= last:
@@ -537,7 +531,6 @@ async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: floa
 
         state = compute_state(df, cfg2)
 
-        # ✅ Pass plan so BE/Trail uses the plan settings (if any)
         plan = (state or {}).get("plan") if isinstance(state, dict) else None
         pe.update_on_new_closed_candle(df, plan=plan)
         pe.maybe_enter(state, df, balance, risk_pct)
@@ -619,7 +612,6 @@ async def ws_endpoint(ws: WebSocket):
                 await asyncio.sleep(0.5)
                 continue
 
-            # Engine state (closed candles)
             state, df_closed = await process_engine_once(inst, tf, user_cfg["balance"], user_cfg["risk_pct"])
 
             agg = AGGS[inst][tf]
@@ -635,7 +627,6 @@ async def ws_endpoint(ws: WebSocket):
                 await asyncio.sleep(0.5)
                 continue
 
-            # ✅ Make displayed "close" be live mid (not last closed)
             if state and isinstance(state, dict) and live_mid is not None:
                 state = state.copy()
                 state["close"] = float(live_mid)
@@ -655,7 +646,7 @@ async def ws_endpoint(ws: WebSocket):
                 "subscription": sub,
                 "state": state,
                 "sizing": sizing,
-                "candles": df_to_candles_payload(df_display),  # ✅ includes current candle
+                "candles": df_to_candles_payload(df_display),
                 "paper": pe.summary(),
                 "global_stats": get_global_paper_stats(),
                 "params": CFG,
