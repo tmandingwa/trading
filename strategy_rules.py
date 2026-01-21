@@ -9,22 +9,16 @@ from indicators import (
     bollinger, rolling_zscore, kama, psar
 )
 
+# ✅ NEW: ML gate
+from ml_model import DirectionModelStore
+
+
 # ------------------------------------------------------------
 # Presets
 # ------------------------------------------------------------
 def _tf_preset(tf: str) -> Dict[str, Any]:
-    """
-    Notes on changes:
-    - TP_RR bumped to 2.0 so the system can survive lower win-rates.
-    - Added BB_MID_BUFFER to avoid entries in the "middle of the range" chop.
-    - Added COOLDOWN_BARS recommendation (engine can enforce; optional cfg input supported too).
-    - Added HTF gate defaults:
-        * M15 is gated by M30 direction
-        * M30 is optionally gated by H1 direction (if you pass H1 candles in cfg)
-    """
     if tf == "M15":
         return {
-            # Trend + momentum defaults
             "EMA_FAST": 20, "EMA_SLOW": 50,
             "KAMA_ER": 10, "KAMA_FAST": 2, "KAMA_SLOW": 30,
             "RSI_LEN": 14,
@@ -34,31 +28,23 @@ def _tf_preset(tf: str) -> Dict[str, Any]:
             "ADX_LEN": 14, "ADX_MIN": 18,
             "ATR_LEN": 14,
 
-            # BB / regime
             "BB_LEN": 20, "BB_STD": 2.0,
             "STD_Z_LEN": 60,
-            "BB_WIDTH_MIN": 0.0010,     # width threshold
+            "BB_WIDTH_MIN": 0.0010,
             "STD_Z_MIN": -0.50,
+            "BB_MID_BUFFER": 0.15,
 
-            # Avoid chop: require price to be away from BB mid by a fraction of BB width
-            "BB_MID_BUFFER": 0.15,      # 15% of BB width away from mid
-
-            # PSAR
             "PSAR_STEP": 0.02, "PSAR_MAX": 0.2,
 
-            # Risk (updated)
             "SL_ATR": 1.2,
-            "TP_RR": 2.0,               # ✅ changed from 1.5 → 2.0
+            "TP_RR": 2.0,
 
-            # Decision tightness
             "MIN_SCORE": 5,
 
-            # Meta recommendations
-            "COOLDOWN_BARS": 3,         # recommended after SL (engine can enforce)
-            "HTF_GATE_TF": "M30",       # M15 should align with M30
+            "COOLDOWN_BARS": 3,
+            "HTF_GATE_TF": "M30",
         }
 
-    # M30
     return {
         "EMA_FAST": 20, "EMA_SLOW": 50,
         "KAMA_ER": 10, "KAMA_FAST": 2, "KAMA_SLOW": 30,
@@ -73,19 +59,17 @@ def _tf_preset(tf: str) -> Dict[str, Any]:
         "STD_Z_LEN": 80,
         "BB_WIDTH_MIN": 0.0012,
         "STD_Z_MIN": -0.35,
-
-        "BB_MID_BUFFER": 0.12,        # slightly softer on M30
+        "BB_MID_BUFFER": 0.12,
 
         "PSAR_STEP": 0.02, "PSAR_MAX": 0.2,
 
-        # Risk (updated)
         "SL_ATR": 1.3,
-        "TP_RR": 2.0,                 # ✅ changed from 1.5 → 2.0
+        "TP_RR": 2.0,
 
         "MIN_SCORE": 5,
 
         "COOLDOWN_BARS": 2,
-        "HTF_GATE_TF": "H1",          # ✅ optional: gate M30 by H1 if provided in cfg
+        "HTF_GATE_TF": "H1",
     }
 
 
@@ -112,13 +96,8 @@ def _coerce_ts(x) -> Optional[pd.Timestamp]:
         return None
 
 def _compute_indicators(df: pd.DataFrame, p: Dict[str, Any]) -> pd.DataFrame:
-    """
-    Computes indicators used both for LTF and HTF direction gating.
-    Assumes df has columns: open, high, low, close
-    """
     out = df.copy()
 
-    # Trend backbone
     out["ema_fast"] = ema(out["close"], p["EMA_FAST"])
     out["ema_slow"] = ema(out["close"], p["EMA_SLOW"])
     out["kama"] = kama(out["close"], p["KAMA_ER"], p["KAMA_FAST"], p["KAMA_SLOW"])
@@ -127,24 +106,19 @@ def _compute_indicators(df: pd.DataFrame, p: Dict[str, Any]) -> pd.DataFrame:
     out["macd"], out["macd_sig"], out["macd_hist"] = macd(out["close"], 12, 26, 9)
     out["adx"] = adx(out, p["ADX_LEN"])
 
-    # Momentum / timing
     out["rsi"] = rsi(out["close"], p["RSI_LEN"])
     out["stoch_k"], out["stoch_d"] = stochastic(out, p["STO_K"], p["STO_D"], p["STO_SMOOTH"])
 
-    # Volatility
     out["atr"] = atr(out, p["ATR_LEN"])
     out["atr_pct"] = out["atr"] / (out["close"].abs() + 1e-12)
 
-    # Bollinger + StdDev regime
     out["bb_mid"], out["bb_up"], out["bb_lo"], out["bb_sd"], out["bb_width"] = bollinger(
         out["close"], p["BB_LEN"], p["BB_STD"]
     )
     out["sd_z"] = rolling_zscore(out["bb_sd"], p["STD_Z_LEN"])
 
-    # PSAR
     out["psar"] = psar(out, p["PSAR_STEP"], p["PSAR_MAX"])
 
-    # Bill Williams
     out["jaw"], out["teeth"], out["lips"] = alligator(out)
     out["fr_low"], out["fr_high"] = fractals(out)
     out["ao"] = awesome_oscillator(out)
@@ -152,10 +126,6 @@ def _compute_indicators(df: pd.DataFrame, p: Dict[str, Any]) -> pd.DataFrame:
     return out
 
 def _trend_direction(last: pd.Series) -> str:
-    """
-    Returns: "UP" | "DOWN" | "FLAT"
-    Uses EMA + KAMA slope + MACD hist for a robust directional bias.
-    """
     if not np.isfinite(last.get("ema_fast", np.nan)) or not np.isfinite(last.get("ema_slow", np.nan)):
         return "FLAT"
 
@@ -170,7 +140,6 @@ def _trend_direction(last: pd.Series) -> str:
     macd_up = bool(np.isfinite(macd_hist) and macd_hist > 0)
     macd_dn = bool(np.isfinite(macd_hist) and macd_hist < 0)
 
-    # 2-of-3 vote
     up_votes = int(ema_up) + int(kama_up) + int(macd_up)
     dn_votes = int(ema_dn) + int(kama_dn) + int(macd_dn)
 
@@ -180,16 +149,7 @@ def _trend_direction(last: pd.Series) -> str:
         return "DOWN"
     return "FLAT"
 
-def _apply_htf_gate(
-    ltf_side: str,
-    htf_dir: str
-) -> Tuple[bool, str]:
-    """
-    Gate LTF signal by HTF direction.
-    - If HTF is UP: block SELL
-    - If HTF is DOWN: block BUY
-    - If HTF is FLAT: allow both (or you can block both; we allow to avoid 0 trades)
-    """
+def _apply_htf_gate(ltf_side: str, htf_dir: str) -> Tuple[bool, str]:
     if ltf_side not in ("BUY", "SELL"):
         return True, ""
 
@@ -200,31 +160,29 @@ def _apply_htf_gate(
     return True, ""
 
 
+# ✅ NEW: single shared model store (cached)
+_MODEL_STORE: Optional[DirectionModelStore] = None
+
+def _get_model_store(artifacts_dir: str) -> DirectionModelStore:
+    global _MODEL_STORE
+    if _MODEL_STORE is None or _MODEL_STORE.artifacts_dir != artifacts_dir:
+        _MODEL_STORE = DirectionModelStore(artifacts_dir=artifacts_dir)
+    return _MODEL_STORE
+
+
 # ------------------------------------------------------------
 # Main
 # ------------------------------------------------------------
 def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Inputs:
-      candles: OHLC dataframe for the selected TF (UTC timestamps are fine; index can be datetime)
-      cfg:
-        - TF: "M15" or "M30" (default "M30")
-        Optional (to enable HTF gating):
-        - HTF_CANDLES: OHLC dataframe for the higher timeframe
-        - HTF_TF: string label for UI/debug (e.g. "M30" or "H1")
-        Optional (cooldown enforcement - engine can pass this after SL):
-        - COOLDOWN_UNTIL: timestamp (string/datetime) -> if now < this, NO_TRADE
-    """
     if candles is None or len(candles) == 0:
         return {"ok": False, "msg": "No candles yet"}
 
-    tf = str(cfg.get("TF", "M30"))
+    tf = str(cfg.get("TF", "M30")).upper().strip()
     p = _tf_preset(tf)
 
     # Cooldown (optional enforcement)
     cooldown_until = _coerce_ts(cfg.get("COOLDOWN_UNTIL"))
     if cooldown_until is not None:
-        # current candle timestamp
         now_ts = candles.index[-1]
         try:
             now_ts = pd.to_datetime(now_ts)
@@ -247,6 +205,7 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "conditions": {"Cooldown active": True},
                 "reason": f"NO_TRADE (cooldown active until {cooldown_until})",
                 "plan": {"entry": None, "sl": None, "tp": None, "sl_atr": p["SL_ATR"], "tp_rr": p["TP_RR"]},
+                "model_prob": None,  # ✅ ML prob included
                 "meta": {
                     "tf": tf,
                     "cooldown_until": str(cooldown_until),
@@ -265,24 +224,18 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
     prev = df.iloc[-2]
     ts = df.index[-1]
 
-    # Safety checks
     needed_cols = ["atr", "ema_fast", "ema_slow", "kama", "bb_width", "psar", "bb_mid", "bb_up", "bb_lo"]
     if any((not np.isfinite(last.get(c, np.nan))) for c in needed_cols):
         return {"ok": False, "msg": "Indicators not ready yet"}
 
-    # ------------------------
     # Regime filters
-    # ------------------------
     vol_ok = bool(last["atr_pct"] > 0.00015)
     bb_ok = bool(last["bb_width"] >= p["BB_WIDTH_MIN"])
     std_ok = bool(np.isfinite(last["sd_z"]) and last["sd_z"] >= p["STD_Z_MIN"])
     adx_ok = bool(np.isfinite(last["adx"]) and last["adx"] >= p["ADX_MIN"])
-
     regime_ok = bool(vol_ok and (bb_ok or std_ok))
 
-    # ------------------------
     # Trend direction (LTF)
-    # ------------------------
     ema_up = bool(last["ema_fast"] > last["ema_slow"])
     ema_dn = bool(last["ema_fast"] < last["ema_slow"])
 
@@ -301,7 +254,6 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
     alli_up = bool(last["lips"] > last["teeth"] > last["jaw"])
     alli_dn = bool(last["lips"] < last["teeth"] < last["jaw"])
 
-    # Momentum confirmations
     rsi_buy_ok = bool(last["rsi"] <= p["RSI_BUY_MAX"])
     rsi_sell_ok = bool(last["rsi"] >= p["RSI_SELL_MIN"])
 
@@ -322,24 +274,18 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
     break_fr_high = bool(np.isfinite(last["fr_high"]) and last["close"] > last["fr_high"])
     break_fr_low  = bool(np.isfinite(last["fr_low"])  and last["close"] < last["fr_low"])
 
-    # Optional BB extreme filter (kept)
     not_buy_extreme = bool(last["close"] < last["bb_up"])
     not_sell_extreme = bool(last["close"] > last["bb_lo"])
 
-    # ✅ New: avoid entries in the middle of the band (chop zone)
-    # buffer = fraction of bb_width, so it adapts to volatility
     bb_mid = float(last["bb_mid"])
     bb_width = float(last["bb_width"])
     mid_buffer = float(p["BB_MID_BUFFER"]) * bb_width
     away_from_mid_buy = bool(last["close"] > (bb_mid + mid_buffer))
     away_from_mid_sell = bool(last["close"] < (bb_mid - mid_buffer))
 
-    # ------------------------
-    # Conditions (LTF)
-    # ------------------------
     buy_conditions = {
         "Regime ok (vol + BB/Std)": regime_ok,
-        "Away from BB mid (anti-chop)": away_from_mid_buy,   # ✅ added
+        "Away from BB mid (anti-chop)": away_from_mid_buy,
         "Trend up (EMA or KAMA)": trend_up,
         "MACD hist > 0": macd_up,
         "ADX ok": adx_ok,
@@ -354,7 +300,7 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     sell_conditions = {
         "Regime ok (vol + BB/Std)": regime_ok,
-        "Away from BB mid (anti-chop)": away_from_mid_sell,  # ✅ added
+        "Away from BB mid (anti-chop)": away_from_mid_sell,
         "Trend down (EMA or KAMA)": trend_dn,
         "MACD hist < 0": macd_dn,
         "ADX ok": adx_ok,
@@ -384,10 +330,7 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
         reasons = [k for k, v in sell_conditions.items() if v]
 
     # ------------------------
-    # ✅ HTF Direction Gate
-    # - M15 gates by M30 (recommended)
-    # - M30 can gate by H1 (recommended if you have H1 candles)
-    # Works only if you pass cfg["HTF_CANDLES"].
+    # HTF Direction Gate (unchanged)
     # ------------------------
     htf_dir = "NA"
     gate_ok = True
@@ -397,11 +340,9 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
     htf_tf_label = str(cfg.get("HTF_TF", p.get("HTF_GATE_TF", "HTF")))
 
     if isinstance(htf_candles, pd.DataFrame) and len(htf_candles) > 0:
-        # Use the HTF's own preset if known; otherwise reuse current preset.
-        # If HTF is H1, using M30 preset is fine for direction bias.
         htf_p = _tf_preset("M30") if htf_tf_label in ("M30", "H1", "H4", "D") else p
-
         htf_min_needed = _min_needed_from_preset(htf_p)
+
         if len(htf_candles) >= htf_min_needed:
             hdf = _compute_indicators(htf_candles, htf_p)
             hlast = hdf.iloc[-1]
@@ -409,15 +350,56 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
 
             gate_ok, gate_msg = _apply_htf_gate(side, htf_dir)
             if not gate_ok:
-                # Block trade
                 side = "NO_TRADE"
-                # preserve original score info
                 conds = {"HTF gate": gate_msg, "HTF_dir": htf_dir, "HTF_TF": htf_tf_label, **conds}
                 reasons = []
         else:
             htf_dir = "NOT_READY"
 
-    # Trade plan: ATR based (RR already adjusted to 2.0 in presets)
+    # ------------------------
+    # ✅ ML Direction Gate (Option A)
+    # Use only the model matching TF being traded
+    # ------------------------
+    artifacts_dir = str(cfg.get("ML_ARTIFACTS_DIR", "artifacts"))
+    use_ml_gate = bool(cfg.get("USE_ML_GATE", True))
+
+    model_prob = None
+    ml_gate_ok = True
+    ml_gate_msg = ""
+    ml_buy_th = None
+    ml_sell_th = None
+    ml_h = None
+
+    if use_ml_gate and side in ("BUY", "SELL"):
+        try:
+            store = _get_model_store(artifacts_dir=artifacts_dir)
+            pred = store.predict_latest(tf=tf, candles=candles)
+            if pred.get("ok"):
+                model_prob = float(pred["p_up"])
+                ml_buy_th = float(pred["buy_th"])
+                ml_sell_th = float(pred["sell_th"])
+                ml_h = int(pred["horizon_bars"])
+
+                ml_gate_ok, ml_gate_msg = store.gate(
+                    side=side, p_up=model_prob, buy_th=ml_buy_th, sell_th=ml_sell_th
+                )
+                if not ml_gate_ok:
+                    side = "NO_TRADE"
+            else:
+                # if ML isn't ready, block to be safe (you can switch this policy if you want)
+                side = "NO_TRADE"
+                ml_gate_ok = False
+                ml_gate_msg = f"Blocked by ML (predict failed): {pred.get('msg','unknown')}"
+        except Exception as e:
+            side = "NO_TRADE"
+            ml_gate_ok = False
+            ml_gate_msg = f"Blocked by ML (exception): {type(e).__name__}: {e}"
+
+        if not ml_gate_ok:
+            # keep existing reasons/conds but add ML message
+            conds = {"ML gate": ml_gate_msg, **conds}
+
+    # Trade plan
     entry_proxy = float(last["close"])
     atrv = float(last["atr"])
 
@@ -440,9 +422,8 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
             "tp": float(tp),
             "sl_atr": float(p["SL_ATR"]),
             "tp_rr": float(p["TP_RR"]),
-            # Optional guidance for engine (if you implement later):
-            "breakeven_at_r": 1.0,     # move SL to entry at +1R
-            "trail_after_r": 1.5,      # start trailing after +1.5R
+            "breakeven_at_r": 1.0,
+            "trail_after_r": 1.5,
         }
 
     reason_str = ""
@@ -450,8 +431,9 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
         reason_str = f"{side} because " + " + ".join(reasons[:6]) + (" ..." if len(reasons) > 6 else "")
     elif side == "NO_TRADE" and gate_msg:
         reason_str = f"NO_TRADE because {gate_msg}"
+    elif side == "NO_TRADE" and ml_gate_msg:
+        reason_str = f"NO_TRADE because {ml_gate_msg}"
 
-    # LTF direction telemetry (useful in logs)
     ltf_dir = _trend_direction(last)
 
     return {
@@ -472,13 +454,24 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
         "reason": reason_str,
         "plan": plan,
 
-        # ✅ meta: helps you debug why trades were blocked / allowed
+        # ✅ NEW: expose model probability for UI + DB
+        # (This is p(up) for the trained horizon; not “next tick”)
+        "model_prob": (float(model_prob) if model_prob is not None else None),
+
         "meta": {
             "tf": tf,
             "ltf_dir": ltf_dir,
             "htf_tf": htf_tf_label,
             "htf_dir": htf_dir,
             "htf_gate_ok": bool(gate_ok),
+
+            # ✅ ML telemetry
+            "use_ml_gate": bool(use_ml_gate),
+            "ml_gate_ok": bool(ml_gate_ok),
+            "ml_horizon_bars": (int(ml_h) if ml_h is not None else None),
+            "ml_buy_th": (float(ml_buy_th) if ml_buy_th is not None else None),
+            "ml_sell_th": (float(ml_sell_th) if ml_sell_th is not None else None),
+
             "bb_mid_buffer_frac": float(p["BB_MID_BUFFER"]),
             "cooldown_bars_recommendation": int(p["COOLDOWN_BARS"]),
         },

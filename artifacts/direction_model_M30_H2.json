@@ -1,0 +1,124 @@
+{
+  "tf": "M30",
+  "horizon_bars": 2,
+  "feature_cols": [
+    "ret1",
+    "ret4",
+    "ret8",
+    "ret16",
+    "ema_diff2050",
+    "ema_diff50100",
+    "ema20_slope",
+    "ema50_slope",
+    "rsi14",
+    "rsi_slope",
+    "macd",
+    "macd_sig",
+    "macd_hist",
+    "macd_cross_up",
+    "macd_cross_dn",
+    "atr_pct",
+    "atr_z",
+    "hl_range",
+    "oc_range",
+    "body_to_range",
+    "bb_width",
+    "bb_z",
+    "bb_width_z",
+    "spread_pct",
+    "spread_z",
+    "vol_z",
+    "vol_chg",
+    "tod_sin",
+    "tod_cos",
+    "trend_flag",
+    "vol_flag"
+  ],
+  "best_model": {
+    "name": "rf",
+    "params": {
+      "max_depth": 10,
+      "min_samples_leaf": 100,
+      "n_estimators": 300
+    },
+    "val_logloss": 0.6922139992322398
+  },
+  "threshold_search": {
+    "buy_grid": [
+      0.52,
+      0.54,
+      0.56,
+      0.58,
+      0.6,
+      0.62,
+      0.64,
+      0.66,
+      0.68,
+      0.7
+    ],
+    "sell_grid": [
+      0.48,
+      0.46,
+      0.44,
+      0.42,
+      0.4,
+      0.38,
+      0.36,
+      0.34,
+      0.32,
+      0.3
+    ],
+    "min_trades_frac": 0.02,
+    "max_trades_frac": 0.5,
+    "min_win_lift": 0.0
+  },
+  "thresholds_best": {
+    "buy": 0.52,
+    "sell": 0.44,
+    "val": {
+      "trades": 340,
+      "win_rate": 61.1764705882353,
+      "expectancy": -7.298242949121337e-05,
+      "avg_ret": 0.00013034456422439554
+    },
+    "val_baseline": {
+      "trades": 9309,
+      "win_rate": 51.4663229133097,
+      "expectancy": -0.0001450948552062816
+    },
+    "constraints": {
+      "min_trades": 186,
+      "max_trades": 4654
+    }
+  },
+  "test": {
+    "logloss": 0.6921432961409462,
+    "auc": 0.5290054665798121,
+    "acc": 0.5213234504243206,
+    "cm": [
+      [
+        3194,
+        1400
+      ],
+      [
+        3056,
+        1659
+      ]
+    ],
+    "baseline": {
+      "trades": 9309,
+      "win_rate": 52.13234504243206,
+      "expectancy": -0.00013459431890119785
+    },
+    "gated": {
+      "buy": 0.52,
+      "sell": 0.44,
+      "stats": {
+        "trades": 311,
+        "win_rate": 65.27331189710611,
+        "expectancy": -0.0001706578230515277,
+        "avg_ret": 5.797893579980351e-05
+      }
+    }
+  }
+}
