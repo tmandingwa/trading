@@ -529,7 +529,6 @@ async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: floa
 
         LAST_ENGINE_CANDLE[key] = latest_closed_ts_ns
 
-        state = compute_state(df, cfg2)
 
         plan = (state or {}).get("plan") if isinstance(state, dict) else None
         pe.update_on_new_closed_candle(df, plan=plan)

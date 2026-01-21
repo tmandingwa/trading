@@ -9,7 +9,7 @@ from indicators import (
     bollinger, rolling_zscore, kama, psar
 )
 
-# ✅ NEW: ML gate
+# ✅ ML
 from ml_model import DirectionModelStore
 
 
@@ -160,14 +160,93 @@ def _apply_htf_gate(ltf_side: str, htf_dir: str) -> Tuple[bool, str]:
     return True, ""
 
 
-# ✅ NEW: single shared model store (cached)
+# ✅ cached model store
 _MODEL_STORE: Optional[DirectionModelStore] = None
 
 def _get_model_store(artifacts_dir: str) -> DirectionModelStore:
     global _MODEL_STORE
-    if _MODEL_STORE is None or _MODEL_STORE.artifacts_dir != artifacts_dir:
+    if _MODEL_STORE is None or getattr(_MODEL_STORE, "artifacts_dir", None) != artifacts_dir:
         _MODEL_STORE = DirectionModelStore(artifacts_dir=artifacts_dir)
     return _MODEL_STORE
+
+
+def _as_float(x) -> Optional[float]:
+    try:
+        if x is None:
+            return None
+        v = float(x)
+        if not np.isfinite(v):
+            return None
+        return v
+    except Exception:
+        return None
+
+
+# ------------------------------------------------------------
+# ✅ ML gating policy (fixes “threshold too high / wrong direction”)
+# ------------------------------------------------------------
+def _ml_gate_policy(
+    side: str,
+    p_up: Optional[float],
+    buy_th: Optional[float],
+    sell_th: Optional[float],
+    cfg: Dict[str, Any]
+) -> Tuple[bool, str, Optional[float], Optional[float]]:
+    """
+    Returns: (allowed, message, buy_th_used, sell_th_used)
+
+    Key changes vs your current code:
+    1) ML FAILURE DOES NOT BLOCK trades by default (fallback to rules).
+    2) Thresholds are clamped into a sane range, so you don't set them too strict accidentally.
+    3) Optional “soft gate”: require only a small edge over 0.5 (default 0.02) if thresholds look too extreme.
+    """
+    # If we don't have a valid probability, don't block (rules-only)
+    if p_up is None:
+        return True, "ML: no prob (fallback to rules)", buy_th, sell_th
+
+    # Config knobs (can be set in CFG/env and passed down):
+    # - ML_STRICT: if True, block when ML says no (old behavior)
+    # - ML_EDGE: small edge over 0.5 required if you want soft confirmation
+    # - ML_MIN_TH / ML_MAX_TH: clamp thresholds into this band
+    ml_strict = bool(cfg.get("ML_STRICT", False))
+    ml_edge = _as_float(cfg.get("ML_EDGE", 0.02))  # 0.02 => 0.52/0.48
+    ml_min_th = _as_float(cfg.get("ML_MIN_TH", 0.52))
+    ml_max_th = _as_float(cfg.get("ML_MAX_TH", 0.65))
+
+    # Normalize/clamp thresholds
+    bt = _as_float(buy_th)
+    st = _as_float(sell_th)
+
+    # If model did not provide thresholds, build soft thresholds around 0.5
+    if bt is None:
+        bt = 0.5 + float(ml_edge)
+    if st is None:
+        st = 0.5 - float(ml_edge)
+
+    # Clamp buy threshold to [ml_min_th, ml_max_th]
+    if ml_min_th is not None and ml_max_th is not None:
+        bt = float(min(max(bt, ml_min_th), ml_max_th))
+        # sell threshold is symmetric; keep it as (1 - bt) unless provided
+        # but still clamp to [1-ml_max_th, 1-ml_min_th]
+        st_lo = 1.0 - float(ml_max_th)
+        st_hi = 1.0 - float(ml_min_th)
+        st = float(min(max(st, st_lo), st_hi))
+
+    # Decide
+    if side == "BUY":
+        ok = bool(p_up >= bt)
+        msg = f"ML BUY gate: p_up={p_up:.3f} >= {bt:.3f} -> {'OK' if ok else 'BLOCK'}"
+    elif side == "SELL":
+        ok = bool(p_up <= st)
+        msg = f"ML SELL gate: p_up={p_up:.3f} <= {st:.3f} -> {'OK' if ok else 'BLOCK'}"
+    else:
+        return True, "ML: no side", bt, st
+
+    # Non-strict mode: if ML blocks, we DO NOT block trades; we just annotate.
+    if (not ok) and (not ml_strict):
+        return True, f"{msg} (non-strict: allow rules)", bt, st
+
+    return ok, msg, bt, st
 
 
 # ------------------------------------------------------------
@@ -205,7 +284,7 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "conditions": {"Cooldown active": True},
                 "reason": f"NO_TRADE (cooldown active until {cooldown_until})",
                 "plan": {"entry": None, "sl": None, "tp": None, "sl_atr": p["SL_ATR"], "tp_rr": p["TP_RR"]},
-                "model_prob": None,  # ✅ ML prob included
+                "model_prob": None,
                 "meta": {
                     "tf": tf,
                     "cooldown_until": str(cooldown_until),
@@ -272,7 +351,7 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
     ao_falling = bool(last["ao"] < prev["ao"])
 
     break_fr_high = bool(np.isfinite(last["fr_high"]) and last["close"] > last["fr_high"])
-    break_fr_low  = bool(np.isfinite(last["fr_low"])  and last["close"] < last["fr_low"])
+    break_fr_low = bool(np.isfinite(last["fr_low"]) and last["close"] < last["fr_low"])
 
     not_buy_extreme = bool(last["close"] < last["bb_up"])
     not_sell_extreme = bool(last["close"] > last["bb_lo"])
@@ -330,7 +409,7 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
         reasons = [k for k, v in sell_conditions.items() if v]
 
     # ------------------------
-    # HTF Direction Gate (unchanged)
+    # HTF Direction Gate
     # ------------------------
     htf_dir = "NA"
     gate_ok = True
@@ -357,8 +436,7 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
             htf_dir = "NOT_READY"
 
     # ------------------------
-    # ✅ ML Direction Gate (Option A)
-    # Use only the model matching TF being traded
+    # ✅ ML Direction Gate (fixed)
     # ------------------------
     artifacts_dir = str(cfg.get("ML_ARTIFACTS_DIR", "artifacts"))
     use_ml_gate = bool(cfg.get("USE_ML_GATE", True))
@@ -374,30 +452,44 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
         try:
             store = _get_model_store(artifacts_dir=artifacts_dir)
             pred = store.predict_latest(tf=tf, candles=candles)
+
             if pred.get("ok"):
-                model_prob = float(pred["p_up"])
-                ml_buy_th = float(pred["buy_th"])
-                ml_sell_th = float(pred["sell_th"])
-                ml_h = int(pred["horizon_bars"])
+                model_prob = _as_float(pred.get("p_up"))
+                ml_buy_th = _as_float(pred.get("buy_th"))
+                ml_sell_th = _as_float(pred.get("sell_th"))
+                try:
+                    ml_h = int(pred.get("horizon_bars")) if pred.get("horizon_bars") is not None else None
+                except Exception:
+                    ml_h = None
 
-                ml_gate_ok, ml_gate_msg = store.gate(
-                    side=side, p_up=model_prob, buy_th=ml_buy_th, sell_th=ml_sell_th
+                ml_gate_ok, ml_gate_msg, bt_used, st_used = _ml_gate_policy(
+                    side=side,
+                    p_up=model_prob,
+                    buy_th=ml_buy_th,
+                    sell_th=ml_sell_th,
+                    cfg=cfg
                 )
-                if not ml_gate_ok:
-                    side = "NO_TRADE"
-            else:
-                # if ML isn't ready, block to be safe (you can switch this policy if you want)
-                side = "NO_TRADE"
-                ml_gate_ok = False
-                ml_gate_msg = f"Blocked by ML (predict failed): {pred.get('msg','unknown')}"
-        except Exception as e:
-            side = "NO_TRADE"
-            ml_gate_ok = False
-            ml_gate_msg = f"Blocked by ML (exception): {type(e).__name__}: {e}"
 
-        if not ml_gate_ok:
-            # keep existing reasons/conds but add ML message
-            conds = {"ML gate": ml_gate_msg, **conds}
+                # record the USED thresholds (may be clamped/soft)
+                ml_buy_th = bt_used
+                ml_sell_th = st_used
+
+                # Only force NO_TRADE if strict policy actually blocks
+                if (not ml_gate_ok) and bool(cfg.get("ML_STRICT", False)):
+                    side = "NO_TRADE"
+
+            else:
+                # ✅ IMPORTANT: do NOT block if ML fails (fallback to rules)
+                ml_gate_ok = True
+                ml_gate_msg = f"ML predict failed (fallback to rules): {pred.get('msg','unknown')}"
+
+        except Exception as e:
+            # ✅ IMPORTANT: do NOT block on exception (fallback to rules)
+            ml_gate_ok = True
+            ml_gate_msg = f"ML exception (fallback to rules): {type(e).__name__}: {e}"
+
+        # Always include ML telemetry in conditions for debugging
+        conds = {"ML": ml_gate_msg, **conds}
 
     # Trade plan
     entry_proxy = float(last["close"])
@@ -431,8 +523,6 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
         reason_str = f"{side} because " + " + ".join(reasons[:6]) + (" ..." if len(reasons) > 6 else "")
     elif side == "NO_TRADE" and gate_msg:
         reason_str = f"NO_TRADE because {gate_msg}"
-    elif side == "NO_TRADE" and ml_gate_msg:
-        reason_str = f"NO_TRADE because {ml_gate_msg}"
 
     ltf_dir = _trend_direction(last)
 
@@ -454,8 +544,7 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
         "reason": reason_str,
         "plan": plan,
 
-        # ✅ NEW: expose model probability for UI + DB
-        # (This is p(up) for the trained horizon; not “next tick”)
+        # ✅ p(up) for your trained horizon
         "model_prob": (float(model_prob) if model_prob is not None else None),
 
         "meta": {
@@ -471,6 +560,12 @@ def compute_state(candles: pd.DataFrame, cfg: Dict[str, Any]) -> Dict[str, Any]:
             "ml_horizon_bars": (int(ml_h) if ml_h is not None else None),
             "ml_buy_th": (float(ml_buy_th) if ml_buy_th is not None else None),
             "ml_sell_th": (float(ml_sell_th) if ml_sell_th is not None else None),
+
+            # Policy knobs (visible in UI debugging)
+            "ml_strict": bool(cfg.get("ML_STRICT", False)),
+            "ml_edge": float(cfg.get("ML_EDGE", 0.02)),
+            "ml_min_th": float(cfg.get("ML_MIN_TH", 0.52)),
+            "ml_max_th": float(cfg.get("ML_MAX_TH", 0.65)),
 
             "bb_mid_buffer_frac": float(p["BB_MID_BUFFER"]),
             "cooldown_bars_recommendation": int(p["COOLDOWN_BARS"]),
