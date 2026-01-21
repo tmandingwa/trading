@@ -5,7 +5,10 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
+
 import pandas as pd
+
+from emailer import send_email
 
 
 @dataclass
@@ -18,7 +21,7 @@ class PaperPosition:
     units: float
     reason: str
 
-    # ✅ NEW: ML probability at entry time
+    # ✅ ML probability at entry time
     model_prob: Optional[float] = None
 
     # trade management state
@@ -42,7 +45,7 @@ class PaperTrade:
     outcome: str
     reason: str
 
-    # ✅ NEW: ML probability captured at entry
+    # ✅ ML probability captured at entry
     model_prob: Optional[float] = None
 
 
@@ -55,6 +58,7 @@ class PaperEngine:
       - trailing after +1.5R
       - sqlite persistence + schema auto-ensure
       - ✅ ML model_prob stored per trade
+      - ✅ Email alerts on OPEN and CLOSE (TP/SL)
     """
 
     def __init__(self, instrument: str, tf: str, db_path: str = "trades.db", max_trades: int = 200):
@@ -115,7 +119,7 @@ class PaperEngine:
                 units REAL NOT NULL,
                 reason TEXT,
 
-                -- ✅ NEW
+                -- ✅ ML prob
                 model_prob REAL,
 
                 r_dist REAL,
@@ -143,7 +147,7 @@ class PaperEngine:
                 outcome TEXT NOT NULL,
                 reason TEXT,
 
-                -- ✅ NEW
+                -- ✅ ML prob
                 model_prob REAL
             )
         """)
@@ -289,6 +293,51 @@ class PaperEngine:
         }
 
     # -----------------------------
+    # Email helpers (safe, won't crash engine)
+    # -----------------------------
+    def _send_open_email(self, pos: PaperPosition) -> None:
+        try:
+            subj = f"[FX] OPEN {self.instrument} {self.tf} {pos.side}"
+            body = (
+                f"Instrument: {self.instrument}\n"
+                f"TF: {self.tf}\n"
+                f"Side: {pos.side}\n"
+                f"Time: {pos.entry_time}\n"
+                f"Entry: {pos.entry:.5f}\n"
+                f"SL: {pos.sl:.5f}\n"
+                f"TP: {pos.tp:.5f}\n"
+                f"Units: {pos.units:.2f} (lots ~ {self.units_to_lots(pos.units):.3f})\n"
+                f"Reason: {pos.reason}\n"
+                f"Model_prob: {pos.model_prob}\n"
+            )
+            send_email(subj, body)
+        except Exception:
+            pass
+
+    def _send_close_email(self, t: PaperTrade) -> None:
+        try:
+            subj = f"[FX] CLOSE {self.instrument} {self.tf} {t.side} {t.outcome}"
+            body = (
+                f"Instrument: {self.instrument}\n"
+                f"TF: {self.tf}\n"
+                f"Side: {t.side}\n"
+                f"Entry time: {t.entry_time}\n"
+                f"Exit time: {t.exit_time}\n"
+                f"Entry: {t.entry:.5f}\n"
+                f"Exit: {t.exit:.5f}\n"
+                f"SL: {t.sl:.5f}\n"
+                f"TP: {t.tp:.5f}\n"
+                f"Units: {t.units:.2f} (lots ~ {self.units_to_lots(t.units):.3f})\n"
+                f"PnL: ${t.pnl_usd:.2f}\n"
+                f"Outcome: {t.outcome}\n"
+                f"Reason: {t.reason}\n"
+                f"Model_prob: {t.model_prob}\n"
+            )
+            send_email(subj, body)
+        except Exception:
+            pass
+
+    # -----------------------------
     # Trade management rules
     # -----------------------------
     def _manage_open_position(self, candles: pd.DataFrame, plan: Optional[Dict[str, Any]] = None) -> None:
@@ -428,6 +477,9 @@ class PaperEngine:
                 conn.execute("DELETE FROM open_positions WHERE instrument=? AND tf=?", (self.instrument, self.tf))
                 conn.commit()
 
+            # ✅ send CLOSE email after DB commit (so it won't double-send if DB write fails)
+            self._send_close_email(new_trade)
+
             self.position = None
             self._save_state()
 
@@ -469,8 +521,11 @@ class PaperEngine:
         if r_dist <= 0:
             return
 
-        # ✅ model probability captured here
-        model_prob = state.get("model_prob", None)
+        # ✅ model probability captured here (supports both keys)
+        model_prob = state.get("model_probability", None)
+        if model_prob is None:
+            model_prob = state.get("model_prob", None)
+
         if model_prob is not None:
             try:
                 model_prob = float(model_prob)
@@ -509,6 +564,9 @@ class PaperEngine:
             conn.commit()
 
         self._save_state()
+
+        # ✅ send OPEN email after state saved
+        self._send_open_email(pos)
 
     # -----------------------------
     # Optional cooldown based on strategy meta

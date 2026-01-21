@@ -70,6 +70,18 @@ SERVER_PORT = int(os.getenv("PORT", os.getenv("SERVER_PORT", "8000")))
 WS_ENABLED = os.getenv("WS_ENABLED", "1") == "1"
 WS_PING_SEC = int(os.getenv("WS_PING_SEC", "25"))
 
+# === Email alerts ===
+EMAIL_ALERTS_ENABLED = os.getenv("EMAIL_ALERTS_ENABLED", "0") == "1"
+
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+
+SMTP_USER = os.getenv("SMTP_USER", "")          # your gmail address
+SMTP_PASS = os.getenv("SMTP_PASS", "")          # Gmail App Password (NOT your normal password)
+
+ALERT_TO_EMAIL = os.getenv("ALERT_TO_EMAIL", "")  # usually same as SMTP_USER
+ALERT_FROM_EMAIL = os.getenv("ALERT_FROM_EMAIL", "")  # usually same as SMTP_USER
+
 # ============================================================
 # Structured config object
 # ============================================================
