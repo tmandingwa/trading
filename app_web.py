@@ -29,8 +29,9 @@ from oanda_history import fetch_candles
 from strategy_rules import compute_state
 from paper_engine import PaperEngine
 
-# ✅ ML loader (now exists in ml_model.py)
+# ✅ ML loader (exists in ml_model.py)
 from ml_model import load_models_from_dir
+
 
 # ============================================================
 # PATHS
@@ -64,9 +65,14 @@ GLOBAL_TRADE_HISTORY_LIMIT = int(os.getenv("GLOBAL_TRADE_HISTORY_LIMIT", "5000")
 GLOBAL_OPEN_LIMIT = int(os.getenv("GLOBAL_OPEN_LIMIT", "200"))
 GLOBAL_CLOSED_LIMIT = int(os.getenv("GLOBAL_CLOSED_LIMIT", "5000"))
 
-# ✅ ML artifacts directory + models cache
+# ✅ ML artifacts directory
 ARTIFACTS_DIR = os.getenv("ARTIFACTS_DIR", os.path.join(BASE_DIR, "artifacts"))
-ML_MODELS: Dict[str, Any] = {}  # contains {"store": ..., "loaded_tfs": ...}
+
+# Strategy rules expect USE_ML_GATE / ML_ARTIFACTS_DIR (based on your strategy_rules.py)
+USE_ML_GATE = os.getenv("USE_ML_GATE", "1") == "1"
+ML_FAIL_OPEN = os.getenv("ML_FAIL_OPEN", "1") == "1"  # if ML predict fails, don't block trades
+
+ML_MODELS: Dict[str, Any] = {}  # {"store": ..., "loaded_tfs": ..., "artifacts_dir": ...}
 
 STREAM_TASK: asyncio.Task | None = None
 ENGINE_TASK: asyncio.Task | None = None
@@ -400,7 +406,9 @@ async def healthz():
         "auto_engine_all": AUTO_ENGINE_ALL,
         "global_trade_history_limit": GLOBAL_TRADE_HISTORY_LIMIT,
         "artifacts_dir": ARTIFACTS_DIR,
-        "ml_models_loaded": list(ML_MODELS.keys()),
+        "use_ml_gate": USE_ML_GATE,
+        "ml_fail_open": ML_FAIL_OPEN,
+        "ml_models_loaded_keys": list(ML_MODELS.keys()) if isinstance(ML_MODELS, dict) else [],
         "ml_loaded_tfs": (ML_MODELS.get("loaded_tfs") if isinstance(ML_MODELS, dict) else None),
     })
 
@@ -415,7 +423,10 @@ async def on_startup():
     # ✅ Load ML models once
     try:
         ML_MODELS = load_models_from_dir(ARTIFACTS_DIR)
-        print(f"[ml] loaded models from {ARTIFACTS_DIR}: keys={list(ML_MODELS.keys())} tfs={ML_MODELS.get('loaded_tfs')}", flush=True)
+        print(
+            f"[ml] loaded models from {ARTIFACTS_DIR}: keys={list(ML_MODELS.keys())} tfs={ML_MODELS.get('loaded_tfs')}",
+            flush=True
+        )
     except Exception as e:
         ML_MODELS = {}
         print(f"[ml][WARN] could not load models: {repr(e)}", flush=True)
@@ -492,9 +503,10 @@ def df_to_candles_payload(df: pd.DataFrame, limit: int = 200):
 async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: float):
     """
     Engine uses CLOSED candles ONLY (no forming candle).
-    UI will use include_current=True separately.
+    UI uses include_current=True separately.
     """
     key = (inst, tf)
+
     lock = ENGINE_LOCKS.get(key)
     if lock is None:
         ENGINE_LOCKS[key] = asyncio.Lock()
@@ -503,8 +515,9 @@ async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: floa
     async with lock:
         agg = AGGS[inst][tf]
         df = agg.to_df(include_current=False)  # ✅ CLOSED ONLY for engine
+
         if df is None or df.empty or len(df) < 50:
-            return None, df
+            return {"ok": False, "msg": "Not enough closed candles"}, df
 
         try:
             latest_closed_ts_ns = int(df.index[-1].value)
@@ -513,26 +526,64 @@ async def process_engine_once(inst: str, tf: str, balance: float, risk_pct: floa
 
         pe = PAPER[inst][tf]
 
-        # ✅ Build per-call cfg (TF + cooldown + ML)
+        # ✅ Build per-call cfg (TF + cooldown + ML keys expected by strategy_rules.py)
         cfg2 = dict(CFG)
         cfg2["TF"] = tf
         cfg2.update(pe.build_strategy_cfg())
 
-        cfg2["ML_ENABLED"] = True
-        cfg2["ML_MODELS"] = ML_MODELS
-        cfg2["ML_STORE"] = ML_MODELS.get("store") if isinstance(ML_MODELS, dict) else None
+        # Keys that YOUR strategy_rules.py actually reads:
+        cfg2["ML_ARTIFACTS_DIR"] = ARTIFACTS_DIR
+        cfg2["USE_ML_GATE"] = USE_ML_GATE
 
+        # Optional: provide HTF candles if you have them (kept None unless you add)
+        cfg2["HTF_CANDLES"] = None
+        cfg2["HTF_TF"] = None
+
+        # --- CRITICAL BUG FIX ---
+        # Ensure state is ALWAYS defined before using it.
+        state: Dict[str, Any] = {"ok": False, "msg": "state not computed"}
+
+        try:
+            state = compute_state(df, cfg2)  # <-- ALWAYS compute
+        except Exception as e:
+            # If strategy fails, don't crash engine loop
+            state = {"ok": False, "msg": f"compute_state exception: {type(e).__name__}: {e}"}
+            print(f"[engine][WARN] {inst} {tf} compute_state failed: {repr(e)}", flush=True)
+            return state, df
+
+        # If candle hasn't advanced, we don't re-run exit/entry; just return latest state for UI
         last = LAST_ENGINE_CANDLE.get(key)
         if last is not None and latest_closed_ts_ns <= last:
-            state = compute_state(df, cfg2)
             return state, df
 
         LAST_ENGINE_CANDLE[key] = latest_closed_ts_ns
 
+        # Manage exits first
+        plan = state.get("plan") if isinstance(state, dict) else None
+        try:
+            pe.update_on_new_closed_candle(df, plan=plan)
+        except Exception as e:
+            print(f"[engine][WARN] {inst} {tf} update_on_new_closed_candle failed: {repr(e)}", flush=True)
 
-        plan = (state or {}).get("plan") if isinstance(state, dict) else None
-        pe.update_on_new_closed_candle(df, plan=plan)
-        pe.maybe_enter(state, df, balance, risk_pct)
+        # Then entries (ONLY if engine is healthy)
+        try:
+            # If ML blocks too aggressively and you want fail-open behavior:
+            # If compute_state returned NO_TRADE due to ML predict failure, allow trade by switching policy.
+            # This requires strategy_rules.py to expose why it blocked. If it doesn't, we do a simple fallback:
+            if ML_FAIL_OPEN and isinstance(state, dict):
+                reason = (state.get("reason") or "")
+                if state.get("side") == "NO_TRADE" and "Blocked by ML" in reason:
+                    # Fail-open: ignore ML gate (but keep all other rules)
+                    cfg2_fo = dict(cfg2)
+                    cfg2_fo["USE_ML_GATE"] = False
+                    state_fo = compute_state(df, cfg2_fo)
+                    # Use fail-open state only if it produces a trade
+                    if isinstance(state_fo, dict) and state_fo.get("side") in ("BUY", "SELL"):
+                        state = state_fo
+
+            pe.maybe_enter(state, df, balance, risk_pct)
+        except Exception as e:
+            print(f"[engine][WARN] {inst} {tf} maybe_enter failed: {repr(e)}", flush=True)
 
         return state, df
 
@@ -633,9 +684,9 @@ async def ws_endpoint(ws: WebSocket):
             pe = PAPER[inst][tf]
 
             sizing = {"units": None, "lots": None}
-            if state and state.get("ok") and state.get("side") in ("BUY", "SELL"):
-                p = state.get("plan", {})
-                if p.get("entry") and p.get("sl"):
+            if state and isinstance(state, dict) and state.get("ok") and state.get("side") in ("BUY", "SELL"):
+                p = state.get("plan", {}) or {}
+                if p.get("entry") is not None and p.get("sl") is not None:
                     u = PaperEngine.compute_units_quote_usd(
                         user_cfg["balance"], user_cfg["risk_pct"], p["entry"], p["sl"]
                     )
